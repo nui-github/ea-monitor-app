@@ -5,6 +5,11 @@ import { useEffect, useState } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://154.16.66.54:8000";
 const ACCOUNT_IDS = [1, 2];
 
+const CF_HEADERS = { "bypass-tunnel-reminder": "1" };
+function apiFetch(url: string, init?: RequestInit) {
+  return fetch(url, { ...init, headers: { ...CF_HEADERS, ...(init?.headers ?? {}) } });
+}
+
 interface Account {
   balance: number;
   equity: number;
@@ -111,7 +116,7 @@ function OverviewTab() {
   useEffect(() => {
     const fetch_ = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/overview`);
+        const res = await apiFetch(`${API_BASE}/api/overview`);
         if (res.ok) setData(await res.json());
       } catch {}
     };
@@ -200,7 +205,7 @@ function CalendarTab() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/api/history/${accountId}?year=${year}&month=${month}`)
+    apiFetch(`${API_BASE}/api/history/${accountId}?year=${year}&month=${month}`)
       .then((r) => r.json())
       .then((d) => setHistory(d))
       .catch(() => setHistory([]))
@@ -330,8 +335,8 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
     const fetchData = async () => {
       try {
         const [accRes, posRes] = await Promise.all([
-          fetch(`${API_BASE}/api/account/${accountId}`),
-          fetch(`${API_BASE}/api/positions/${accountId}`),
+          apiFetch(`${API_BASE}/api/account/${accountId}`),
+          apiFetch(`${API_BASE}/api/positions/${accountId}`),
         ]);
         if (!accRes.ok || !posRes.ok) throw new Error("bad response");
         setAccount(await accRes.json());
@@ -349,7 +354,7 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   const handleEaToggle = async () => {
     const next = !eaEnabled;
     try {
-      await fetch(`${API_BASE}/api/ea_toggle/${accountId}`, {
+      await apiFetch(`${API_BASE}/api/ea_toggle/${accountId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: next }),
@@ -361,7 +366,7 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   const handleCloseAll = async () => {
     setClosing(true);
     try {
-      await fetch(`${API_BASE}/api/close_all/${accountId}`, { method: "POST" });
+      await apiFetch(`${API_BASE}/api/close_all/${accountId}`, { method: "POST" });
     } catch {}
     finally {
       setClosing(false);
