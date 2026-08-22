@@ -27,6 +27,7 @@ import {
   Target,
   Waves,
   BarChart3,
+  GitCompare,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -277,6 +278,33 @@ function useMonthlyHistory() {
   return { year, month, days, daily, cumulative, hasData, accountId, setAccountId, accountLabels };
 }
 
+interface AccountStat {
+  accountId: number;
+  profit: number;
+  trades: number;
+}
+
+function useAccountComparison(year: number, month: number) {
+  const [data, setData] = useState<AccountStat[]>([]);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as DayHistory[])
+          .then((hist: DayHistory[]) => ({
+            accountId: id,
+            profit: hist.reduce((s, h) => s + h.profit, 0),
+            trades: hist.reduce((s, h) => s + h.trades, 0),
+          }))
+      )
+    ).then(setData);
+  }, [year, month]);
+
+  return data;
+}
+
 interface SymbolStat {
   symbol: string;
   profit: number;
@@ -333,11 +361,54 @@ function chartScales(cumulative: number[], days: number[]) {
 function PerformanceCharts() {
   const m = useMonthlyHistory();
   const symbolStats = useSymbolStats(m.accountId, m.year, m.month);
+  const accountStats = useAccountComparison(m.year, m.month);
   return (
     <div className="space-y-4">
       <PnLChart {...m} />
+      <AccountComparisonChart stats={accountStats} accountLabels={m.accountLabels} />
       <DrawdownChart {...m} />
       <SymbolBreakdown stats={symbolStats} />
+    </div>
+  );
+}
+
+function AccountComparisonChart({ stats, accountLabels }: { stats: AccountStat[]; accountLabels: Record<number, string> }) {
+  const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
+  const barMaxH = 140;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-4">
+        <GitCompare className="h-4 w-4" />
+        เปรียบเทียบกำไรแต่ละพอร์ต เดือนนี้
+      </div>
+      {stats.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-6 text-center">กำลังโหลด...</div>
+      ) : (
+        <div className="flex items-end justify-center gap-10" style={{ height: barMaxH + 56 }}>
+          {stats.map((s) => {
+            const h = Math.max((Math.abs(s.profit) / maxAbs) * barMaxH, 2);
+            const positive = s.profit >= 0;
+            return (
+              <div key={s.accountId} className="flex flex-col items-center gap-2 w-28">
+                <div className={`text-sm font-semibold ${positive ? "text-emerald-400" : "text-red-400"}`}>
+                  {positive ? "+" : ""}{s.profit.toFixed(2)}
+                </div>
+                <div className="w-full flex flex-col justify-end" style={{ height: barMaxH }}>
+                  <div
+                    className={`w-full rounded-t ${positive ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                    style={{ height: h }}
+                  />
+                </div>
+                <div className="text-xs text-zinc-400 text-center">
+                  {accountLabels[s.accountId] ?? `Account ${s.accountId}`}
+                </div>
+                <div className="text-xs text-zinc-500">{s.trades} trades</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
