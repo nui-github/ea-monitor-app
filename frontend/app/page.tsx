@@ -340,8 +340,8 @@ function useSymbolStats(accountId: number | "all", year: number, month: number) 
 }
 
 function chartScales(cumulative: number[], days: number[]) {
-  const W = 700, H = 220;
-  const padL = 44, padR = 12, padT = 16, padB = 24;
+  const W = 700, H = 170;
+  const padL = 44, padR = 12, padT = 14, padB = 22;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
@@ -363,10 +363,12 @@ function PerformanceCharts() {
   const symbolStats = useSymbolStats(m.accountId, m.year, m.month);
   const accountStats = useAccountComparison(m.year, m.month);
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <PnLChart {...m} />
-      <AccountComparisonChart stats={accountStats} accountLabels={m.accountLabels} />
-      <DrawdownChart {...m} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <AccountComparisonChart stats={accountStats} accountLabels={m.accountLabels} />
+        <DrawdownChart {...m} />
+      </div>
       <SymbolBreakdown stats={symbolStats} />
     </div>
   );
@@ -374,24 +376,24 @@ function PerformanceCharts() {
 
 function AccountComparisonChart({ stats, accountLabels }: { stats: AccountStat[]; accountLabels: Record<number, string> }) {
   const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
-  const barMaxH = 140;
+  const barMaxH = 92;
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="text-sm font-medium flex items-center gap-1.5 mb-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 h-full flex flex-col">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
         <GitCompare className="h-4 w-4" />
-        เปรียบเทียบกำไรแต่ละพอร์ต เดือนนี้
+        เปรียบเทียบกำไรแต่ละพอร์ต
       </div>
       {stats.length === 0 ? (
-        <div className="text-zinc-500 text-sm py-6 text-center">กำลังโหลด...</div>
+        <div className="text-zinc-500 text-sm py-6 text-center flex-1 flex items-center justify-center">กำลังโหลด...</div>
       ) : (
-        <div className="flex items-end justify-center gap-10" style={{ height: barMaxH + 56 }}>
+        <div className="flex items-end justify-center gap-8 flex-1" style={{ minHeight: barMaxH + 48 }}>
           {stats.map((s) => {
             const h = Math.max((Math.abs(s.profit) / maxAbs) * barMaxH, 2);
             const positive = s.profit >= 0;
             return (
-              <div key={s.accountId} className="flex flex-col items-center gap-2 w-28">
-                <div className={`text-sm font-semibold ${positive ? "text-emerald-400" : "text-red-400"}`}>
+              <div key={s.accountId} className="flex flex-col items-center gap-1 w-24">
+                <div className={`text-xs font-semibold ${positive ? "text-emerald-400" : "text-red-400"}`}>
                   {positive ? "+" : ""}{s.profit.toFixed(2)}
                 </div>
                 <div className="w-full flex flex-col justify-end" style={{ height: barMaxH }}>
@@ -417,19 +419,19 @@ function SymbolBreakdown({ stats }: { stats: SymbolStat[] }) {
   const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="text-sm font-medium flex items-center gap-1.5 mb-3">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
         <BarChart3 className="h-4 w-4" />
-        กำไร/ขาดทุนแยกตาม Symbol เดือนนี้
+        กำไร/ขาดทุนแยกตาม Symbol
       </div>
       {stats.length === 0 ? (
-        <div className="text-zinc-500 text-sm py-6 text-center">ไม่มีข้อมูล</div>
+        <div className="text-zinc-500 text-sm py-4 text-center">ไม่มีข้อมูล</div>
       ) : (
-        <div className="space-y-2.5">
+        <div className="space-y-1.5">
           {stats.map((s) => (
             <div key={s.symbol} className="flex items-center gap-3">
               <div className="w-24 text-sm font-medium text-zinc-300 shrink-0">{s.symbol}</div>
-              <div className="flex-1 h-5 bg-zinc-800 rounded overflow-hidden">
+              <div className="flex-1 h-4 bg-zinc-800 rounded overflow-hidden">
                 <div
                   className={`h-full ${s.profit >= 0 ? "bg-emerald-500/70" : "bg-red-500/70"}`}
                   style={{ width: `${(Math.abs(s.profit) / maxAbs) * 100}%` }}
@@ -470,8 +472,8 @@ function PnLChart({
   const gradId = `pnlGrad-${accountId}`;
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <div className="text-sm font-medium flex items-center gap-1.5">
             {monthTotal >= 0 ? (
@@ -497,9 +499,9 @@ function PnLChart({
         </div>
       </div>
       {!hasData ? (
-        <div className="h-[220px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+        <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
       ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[220px]">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[170px]">
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={monthTotal >= 0 ? "#34d399" : "#f87171"} stopOpacity={0.35} />
@@ -553,8 +555,8 @@ function DrawdownChart({
   });
   const maxDrawdown = Math.min(0, ...drawdown);
 
-  const W = 700, H = 140;
-  const padL = 44, padR = 12, padT = 12, padB = 24;
+  const W = 460, H = 140;
+  const padL = 44, padR = 12, padT = 12, padB = 22;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const ddRange = Math.max(1, -maxDrawdown);
@@ -577,21 +579,21 @@ function DrawdownChart({
   const currentLabel = accountId === "all" ? "ทุกพอร์ต" : accountLabels[accountId] ?? `Account ${accountId}`;
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <div className="text-sm font-medium flex items-center gap-1.5">
           <Waves className="h-4 w-4 text-red-400" />
-          Drawdown เดือนนี้
+          Drawdown
           <span className="text-xs text-zinc-500 font-normal">({currentLabel})</span>
         </div>
-        <div className="text-lg font-semibold text-red-400">
+        <div className="text-sm font-semibold text-red-400">
           {maxDrawdown.toFixed(2)} USD
         </div>
       </div>
       {!hasData ? (
-        <div className="h-[140px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+        <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm" style={{ minHeight: 140 }}>กำลังโหลด...</div>
       ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[140px]">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" style={{ minHeight: 140 }}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#f87171" stopOpacity={0} />
