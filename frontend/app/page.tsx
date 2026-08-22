@@ -26,6 +26,7 @@ import {
   Repeat,
   Target,
   Waves,
+  BarChart3,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -273,7 +274,41 @@ function useMonthlyHistory() {
   const cumulative = daily.map((v) => (running += v));
   const hasData = history.length > 0;
 
-  return { days, daily, cumulative, hasData, accountId, setAccountId, accountLabels };
+  return { year, month, days, daily, cumulative, hasData, accountId, setAccountId, accountLabels };
+}
+
+interface SymbolStat {
+  symbol: string;
+  profit: number;
+  trades: number;
+}
+
+function useSymbolStats(accountId: number | "all", year: number, month: number) {
+  const [stats, setStats] = useState<SymbolStat[]>([]);
+
+  useEffect(() => {
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/symbol_stats/${id}?year=${year}&month=${month}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as SymbolStat[])
+      )
+    ).then((results) => {
+      const merged: Record<string, SymbolStat> = {};
+      results.flat().forEach((s: SymbolStat) => {
+        if (merged[s.symbol]) {
+          merged[s.symbol].profit += s.profit;
+          merged[s.symbol].trades += s.trades;
+        } else {
+          merged[s.symbol] = { ...s };
+        }
+      });
+      setStats(Object.values(merged).sort((a, b) => b.profit - a.profit));
+    });
+  }, [accountId, year, month]);
+
+  return stats;
 }
 
 function chartScales(cumulative: number[], days: number[]) {
@@ -297,10 +332,46 @@ function chartScales(cumulative: number[], days: number[]) {
 
 function PerformanceCharts() {
   const m = useMonthlyHistory();
+  const symbolStats = useSymbolStats(m.accountId, m.year, m.month);
   return (
     <div className="space-y-4">
       <PnLChart {...m} />
       <DrawdownChart {...m} />
+      <SymbolBreakdown stats={symbolStats} />
+    </div>
+  );
+}
+
+function SymbolBreakdown({ stats }: { stats: SymbolStat[] }) {
+  const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-3">
+        <BarChart3 className="h-4 w-4" />
+        กำไร/ขาดทุนแยกตาม Symbol เดือนนี้
+      </div>
+      {stats.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-6 text-center">ไม่มีข้อมูล</div>
+      ) : (
+        <div className="space-y-2.5">
+          {stats.map((s) => (
+            <div key={s.symbol} className="flex items-center gap-3">
+              <div className="w-24 text-sm font-medium text-zinc-300 shrink-0">{s.symbol}</div>
+              <div className="flex-1 h-5 bg-zinc-800 rounded overflow-hidden">
+                <div
+                  className={`h-full ${s.profit >= 0 ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                  style={{ width: `${(Math.abs(s.profit) / maxAbs) * 100}%` }}
+                />
+              </div>
+              <div className={`w-24 text-right text-sm font-semibold shrink-0 ${s.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {s.profit >= 0 ? "+" : ""}{s.profit.toFixed(2)}
+              </div>
+              <div className="w-16 text-right text-xs text-zinc-500 shrink-0">{s.trades} trades</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -317,3 +317,36 @@ def get_history(
         daily[day_key]["trades"] += 1
 
     return list(daily.values())
+
+
+@app.get("/api/symbol_stats/{account_id}")
+def get_symbol_stats(
+    account_id: int,
+    year: int = Query(...),
+    month: int = Query(...),
+):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return []
+
+    date_from = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        return []
+
+    stats: dict = {}
+    for d in deals:
+        if d.entry != 1:
+            continue
+        if d.symbol not in stats:
+            stats[d.symbol] = {"symbol": d.symbol, "profit": 0.0, "trades": 0}
+        stats[d.symbol]["profit"] += d.profit + d.commission + d.swap
+        stats[d.symbol]["trades"] += 1
+
+    return list(stats.values())
