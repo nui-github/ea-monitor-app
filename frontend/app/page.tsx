@@ -193,7 +193,7 @@ export default function Home() {
       <PullToRefreshIndicator progress={progress} refreshing={refreshing} />
       <div style={{ transform: `translateY(${shiftPx}px)`, transition: dragging ? "none" : "transform 0.25s ease" }}>
       <header
-        className="flex items-center gap-6 px-6 py-4 border-b border-zinc-800"
+        className="sticky top-0 z-30 flex items-center gap-6 px-6 py-4 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur"
         style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
       >
         <h1 className="text-xl font-semibold shrink-0 flex items-center gap-2">
