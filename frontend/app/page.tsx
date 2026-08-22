@@ -236,25 +236,36 @@ function PnLChart() {
   const monthTotal = cumulative[cumulative.length - 1] ?? 0;
   const hasData = history.length > 0;
 
-  const W = 700, H = 200, PAD = 28;
-  const maxAbs = Math.max(1, ...daily.map((v) => Math.abs(v)));
-  const barW = (W - PAD * 2) / days.length;
-
-  const barY = (v: number) => H / 2 - (v / maxAbs) * (H / 2 - PAD / 2);
+  const W = 700, H = 220;
+  const padL = 44, padR = 12, padT = 16, padB = 24;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
 
   const cumMin = Math.min(0, ...cumulative);
   const cumMax = Math.max(0, ...cumulative);
-  const cumRange = cumMax - cumMin || 1;
-  const lineY = (v: number) => H - PAD - ((v - cumMin) / cumRange) * (H - PAD * 1.5);
-  const linePoints = cumulative
-    .map((v, i) => `${PAD + barW * i + barW / 2},${lineY(v)}`)
-    .join(" ");
+  const range = cumMax - cumMin || 1;
+  const yFor = (v: number) => padT + plotH - ((v - cumMin) / range) * plotH;
+  const xFor = (i: number) => padL + (days.length === 1 ? plotW / 2 : (plotW * i) / (days.length - 1));
+  const zeroY = yFor(0);
+
+  const linePoints = cumulative.map((v, i) => [xFor(i), yFor(v)] as const);
+  const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const areaPath =
+    `M${linePoints[0][0]},${zeroY} ` +
+    linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+    ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`;
+
+  const ticks = [cumMax, (cumMax + cumMin) / 2, cumMin].filter((v, i, arr) => arr.indexOf(v) === i);
+  const dayStep = Math.ceil(days.length / 6);
+  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
+
+  const gradId = `pnlGrad-${accountId}`;
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="text-sm font-medium">กำไร/ขาดทุนรายวัน เดือนนี้</div>
+          <div className="text-sm font-medium">กำไรสะสม เดือนนี้</div>
           <select
             value={accountId}
             onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
@@ -266,42 +277,49 @@ function PnLChart() {
             ))}
           </select>
         </div>
-        <div className={`text-sm font-semibold ${monthTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+        <div className={`text-lg font-semibold ${monthTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
           {monthTotal >= 0 ? "+" : ""}{monthTotal.toFixed(2)} USD
         </div>
       </div>
       {!hasData ? (
-        <div className="h-[200px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+        <div className="h-[220px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
       ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[200px]">
-          <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="var(--color-zinc-700, #3f3f46)" strokeWidth={1} />
-          {daily.map((v, i) => {
-            const x = PAD + barW * i + barW * 0.15;
-            const w = barW * 0.7;
-            const y = v >= 0 ? barY(v) : H / 2;
-            const h = Math.abs(barY(v) - H / 2);
-            return (
-              <rect
-                key={i}
-                x={x}
-                y={y}
-                width={Math.max(w, 1)}
-                height={Math.max(h, 1)}
-                fill={v >= 0 ? "#34d399" : "#f87171"}
-                opacity={0.75}
-              >
-                <title>{`${days[i]}: ${v >= 0 ? "+" : ""}${v.toFixed(2)} USD`}</title>
-              </rect>
-            );
-          })}
-          <polyline points={linePoints} fill="none" stroke="#60a5fa" strokeWidth={2} />
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[220px]">
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={monthTotal >= 0 ? "#34d399" : "#f87171"} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={monthTotal >= 0 ? "#34d399" : "#f87171"} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={padL} y1={yFor(t)} x2={W - padR} y2={yFor(t)} stroke="#27272a" strokeWidth={1} />
+              <text x={padL - 8} y={yFor(t)} dy={3} textAnchor="end" fontSize={10} fill="#71717a">
+                {t.toFixed(0)}
+              </text>
+            </g>
+          ))}
+
+          {xLabels.map((d) => (
+            <text key={d} x={xFor(days.indexOf(d))} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {d}
+            </text>
+          ))}
+
+          <path d={areaPath} fill={`url(#${gradId})`} />
+          <path d={linePath} fill="none" stroke={monthTotal >= 0 ? "#34d399" : "#f87171"} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {linePoints.map(([x, y], i) => (
+            <g key={i}>
+              <circle cx={x} cy={y} r={2.5} fill={monthTotal >= 0 ? "#34d399" : "#f87171"} />
+              <circle cx={x} cy={y} r={8} fill="transparent">
+                <title>{`วันที่ ${days[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (วันนี้ ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
+              </circle>
+            </g>
+          ))}
         </svg>
       )}
-      <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500">
-        <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-emerald-400/75" /> กำไรรายวัน</div>
-        <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-red-400/75" /> ขาดทุนรายวัน</div>
-        <div className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-blue-400" /> กำไรสะสม</div>
-      </div>
     </div>
   );
 }
