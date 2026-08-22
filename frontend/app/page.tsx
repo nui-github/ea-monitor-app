@@ -108,7 +108,7 @@ export default function Home() {
           <Activity className="h-5 w-5 text-emerald-400" />
           EA Monitor
         </h1>
-        <nav className="flex gap-1">
+        <nav className="hidden sm:flex gap-1">
           {(["overview", "positions", "calendar"] as Tab[]).map((t) => {
             const Icon = t === "overview" ? LayoutDashboard : t === "positions" ? Wallet : CalendarDays;
             return (
@@ -129,7 +129,7 @@ export default function Home() {
         </nav>
       </header>
 
-      <main className="p-6 max-w-5xl mx-auto">
+      <main className="p-6 pb-24 sm:pb-6 max-w-5xl mx-auto">
         {tab === "overview" && <OverviewTab />}
         {tab === "positions" && (
           <div className="space-y-8">
@@ -140,6 +140,28 @@ export default function Home() {
         )}
         {tab === "calendar" && <CalendarTab />}
       </main>
+
+      <nav
+        className="sm:hidden fixed bottom-0 inset-x-0 bg-zinc-900/95 backdrop-blur border-t border-zinc-800 flex items-stretch z-40"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {(["overview", "positions", "calendar"] as Tab[]).map((t) => {
+          const Icon = t === "overview" ? LayoutDashboard : t === "positions" ? Wallet : CalendarDays;
+          const active = tab === t;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 text-xs transition-colors ${
+                active ? "text-emerald-400" : "text-zinc-500"
+              }`}
+            >
+              <Icon className={`h-5 w-5 ${active ? "text-emerald-400" : "text-zinc-500"}`} />
+              {t === "overview" ? "ภาพรวม" : t === "positions" ? "พอร์ต" : "Calendar"}
+            </button>
+          );
+        })}
+      </nav>
     </div>
   );
 }
