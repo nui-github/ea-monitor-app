@@ -103,7 +103,10 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans">
-      <header className="flex items-center gap-6 px-6 py-4 border-b border-zinc-800">
+      <header
+        className="flex items-center gap-6 px-6 py-4 border-b border-zinc-800"
+        style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
+      >
         <h1 className="text-xl font-semibold shrink-0 flex items-center gap-2">
           <Activity className="h-5 w-5 text-emerald-400" />
           EA Monitor
