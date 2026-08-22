@@ -25,6 +25,7 @@ import {
   ArrowDownRight,
   Repeat,
   Target,
+  Waves,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -172,7 +173,7 @@ function OverviewTab() {
         />
       </div>
 
-      <PnLChart />
+      <PerformanceCharts />
 
       <div className="space-y-3">
         {data?.accounts.map((acc) => (
@@ -221,7 +222,7 @@ function OverviewTab() {
   );
 }
 
-function PnLChart() {
+function useMonthlyHistory() {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -270,10 +271,12 @@ function PnLChart() {
 
   let running = 0;
   const cumulative = daily.map((v) => (running += v));
-
-  const monthTotal = cumulative[cumulative.length - 1] ?? 0;
   const hasData = history.length > 0;
 
+  return { days, daily, cumulative, hasData, accountId, setAccountId, accountLabels };
+}
+
+function chartScales(cumulative: number[], days: number[]) {
   const W = 700, H = 220;
   const padL = 44, padR = 12, padT = 16, padB = 24;
   const plotW = W - padL - padR;
@@ -284,6 +287,35 @@ function PnLChart() {
   const range = cumMax - cumMin || 1;
   const yFor = (v: number) => padT + plotH - ((v - cumMin) / range) * plotH;
   const xFor = (i: number) => padL + (days.length === 1 ? plotW / 2 : (plotW * i) / (days.length - 1));
+
+  const ticks = [cumMax, (cumMax + cumMin) / 2, cumMin].filter((v, i, arr) => arr.indexOf(v) === i);
+  const dayStep = Math.ceil(days.length / 6);
+  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
+
+  return { W, H, padL, padR, yFor, xFor, ticks, xLabels };
+}
+
+function PerformanceCharts() {
+  const m = useMonthlyHistory();
+  return (
+    <div className="space-y-4">
+      <PnLChart {...m} />
+      <DrawdownChart {...m} />
+    </div>
+  );
+}
+
+function PnLChart({
+  days,
+  cumulative,
+  daily,
+  hasData,
+  accountId,
+  setAccountId,
+  accountLabels,
+}: ReturnType<typeof useMonthlyHistory>) {
+  const monthTotal = cumulative[cumulative.length - 1] ?? 0;
+  const { W, H, padL, padR, yFor, xFor, ticks, xLabels } = chartScales(cumulative, days);
   const zeroY = yFor(0);
 
   const linePoints = cumulative.map((v, i) => [xFor(i), yFor(v)] as const);
@@ -292,10 +324,6 @@ function PnLChart() {
     `M${linePoints[0][0]},${zeroY} ` +
     linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
     ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`;
-
-  const ticks = [cumMax, (cumMax + cumMin) / 2, cumMin].filter((v, i, arr) => arr.indexOf(v) === i);
-  const dayStep = Math.ceil(days.length / 6);
-  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
 
   const gradId = `pnlGrad-${accountId}`;
 
@@ -360,6 +388,98 @@ function PnLChart() {
               <circle cx={x} cy={y} r={2.5} fill={monthTotal >= 0 ? "#34d399" : "#f87171"} />
               <circle cx={x} cy={y} r={8} fill="transparent">
                 <title>{`วันที่ ${days[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (วันนี้ ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
+              </circle>
+            </g>
+          ))}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+function DrawdownChart({
+  days,
+  cumulative,
+  hasData,
+  accountId,
+  accountLabels,
+}: ReturnType<typeof useMonthlyHistory>) {
+  let peak = 0;
+  const drawdown = cumulative.map((v) => {
+    peak = Math.max(peak, v);
+    return v - peak;
+  });
+  const maxDrawdown = Math.min(0, ...drawdown);
+
+  const W = 700, H = 140;
+  const padL = 44, padR = 12, padT = 12, padB = 24;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const ddRange = Math.max(1, -maxDrawdown);
+  const yFor = (v: number) => padT + (-v / ddRange) * plotH;
+  const xFor = (i: number) => padL + (days.length === 1 ? plotW / 2 : (plotW * i) / (days.length - 1));
+  const zeroY = yFor(0);
+
+  const dayStep = Math.ceil(days.length / 6);
+  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
+  const ticks = [0, maxDrawdown / 2, maxDrawdown].filter((v, i, arr) => arr.indexOf(v) === i);
+
+  const linePoints = drawdown.map((v, i) => [xFor(i), yFor(v)] as const);
+  const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const areaPath =
+    `M${linePoints[0][0]},${zeroY} ` +
+    linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+    ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`;
+
+  const gradId = `ddGrad-${accountId}`;
+  const currentLabel = accountId === "all" ? "ทุกพอร์ต" : accountLabels[accountId] ?? `Account ${accountId}`;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <Waves className="h-4 w-4 text-red-400" />
+          Drawdown เดือนนี้
+          <span className="text-xs text-zinc-500 font-normal">({currentLabel})</span>
+        </div>
+        <div className="text-lg font-semibold text-red-400">
+          {maxDrawdown.toFixed(2)} USD
+        </div>
+      </div>
+      {!hasData ? (
+        <div className="h-[140px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[140px]">
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f87171" stopOpacity={0} />
+              <stop offset="100%" stopColor="#f87171" stopOpacity={0.45} />
+            </linearGradient>
+          </defs>
+
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={padL} y1={yFor(t)} x2={W - padR} y2={yFor(t)} stroke="#27272a" strokeWidth={1} />
+              <text x={padL - 8} y={yFor(t)} dy={3} textAnchor="end" fontSize={10} fill="#71717a">
+                {t.toFixed(0)}
+              </text>
+            </g>
+          ))}
+
+          {xLabels.map((d) => (
+            <text key={d} x={xFor(days.indexOf(d))} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {d}
+            </text>
+          ))}
+
+          <path d={areaPath} fill={`url(#${gradId})`} />
+          <path d={linePath} fill="none" stroke="#f87171" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {linePoints.map(([x, y], i) => (
+            <g key={i}>
+              <circle cx={x} cy={y} r={2} fill="#f87171" />
+              <circle cx={x} cy={y} r={8} fill="transparent">
+                <title>{`วันที่ ${days[i]}: drawdown ${drawdown[i].toFixed(2)} USD`}</title>
               </circle>
             </g>
           ))}
