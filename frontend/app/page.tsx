@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
+  RotateCw,
   LayoutDashboard,
   Wallet,
   CalendarDays,
@@ -98,11 +99,99 @@ interface DayHistory {
 
 type Tab = "overview" | "positions" | "calendar";
 
+const PULL_THRESHOLD = 70;
+const PULL_MAX = 100;
+const PULL_SHIFT = 50;
+
+function usePullToRefresh() {
+  const [progress, setProgress] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const startYRef = useRef<number | null>(null);
+  const pullingRef = useRef(false);
+
+  useEffect(() => {
+    if (refreshing) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (window.scrollY <= 0) {
+        startYRef.current = e.touches[0].clientY;
+        pullingRef.current = true;
+        setDragging(true);
+      } else {
+        pullingRef.current = false;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pullingRef.current || startYRef.current === null) return;
+      const diff = e.touches[0].clientY - startYRef.current;
+      if (diff <= 0 || window.scrollY > 0) {
+        pullingRef.current = false;
+        setDragging(false);
+        setProgress(0);
+        return;
+      }
+      e.preventDefault();
+      const eased = Math.min(diff * 0.5, PULL_MAX);
+      setProgress(eased / PULL_THRESHOLD);
+    };
+
+    const onTouchEnd = () => {
+      if (!pullingRef.current) return;
+      pullingRef.current = false;
+      setDragging(false);
+      setProgress((p) => {
+        if (p >= 1) {
+          setRefreshing(true);
+          setTimeout(() => window.location.reload(), 200);
+          return 1;
+        }
+        return 0;
+      });
+    };
+
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd);
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [refreshing]);
+
+  return { progress: Math.min(progress, 1), refreshing, dragging };
+}
+
+function PullToRefreshIndicator({ progress, refreshing }: { progress: number; refreshing: boolean }) {
+  if (progress <= 0 && !refreshing) return null;
+  const translate = -36 + progress * 56;
+
+  return (
+    <div
+      className="fixed left-0 right-0 z-50 flex justify-center pointer-events-none"
+      style={{ top: "env(safe-area-inset-top)", transform: `translateY(${translate}px)`, opacity: progress }}
+    >
+      <div className="bg-zinc-800 border border-zinc-700 rounded-full p-2 shadow-lg mt-2">
+        <RotateCw
+          className={`h-4 w-4 text-emerald-400 ${refreshing ? "animate-spin" : ""}`}
+          style={refreshing ? undefined : { transform: `rotate(${progress * 360}deg)` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("overview");
+  const { progress, refreshing, dragging } = usePullToRefresh();
+  const shiftPx = (refreshing ? 1 : progress) * PULL_SHIFT;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans">
+      <PullToRefreshIndicator progress={progress} refreshing={refreshing} />
+      <div style={{ transform: `translateY(${shiftPx}px)`, transition: dragging ? "none" : "transform 0.25s ease" }}>
       <header
         className="flex items-center gap-6 px-6 py-4 border-b border-zinc-800"
         style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
@@ -143,6 +232,7 @@ export default function Home() {
         )}
         {tab === "calendar" && <CalendarTab />}
       </main>
+      </div>
 
       <nav
         className="sm:hidden fixed bottom-0 inset-x-0 bg-zinc-900/95 backdrop-blur border-t border-zinc-800 flex items-stretch z-40"
