@@ -134,6 +134,8 @@ function OverviewTab() {
         <StatCard label="กำไร/ขาดทุนลอยตัว" value={data ? `${profit >= 0 ? "+" : ""}${profit.toFixed(2)}` : "—"} sub="USD" accent={data ? (profit >= 0 ? "green" : "red") : undefined} />
       </div>
 
+      <PnLChart />
+
       <div className="space-y-3">
         {data?.accounts.map((acc) => (
           <div key={acc.account_id} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
@@ -176,6 +178,129 @@ function OverviewTab() {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function PnLChart() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const today = now.getDate();
+  const [history, setHistory] = useState<DayHistory[]>([]);
+  const [accountId, setAccountId] = useState<number | "all">("all");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
+          .then((r) => r.json())
+          .catch(() => [] as DayHistory[])
+      )
+    ).then((results) => {
+      const merged: Record<string, DayHistory> = {};
+      results.flat().forEach((h: DayHistory) => {
+        if (merged[h.date]) merged[h.date].profit += h.profit;
+        else merged[h.date] = { ...h };
+      });
+      setHistory(Object.values(merged));
+    });
+  }, [year, month, accountId]);
+
+  const byDay: Record<string, number> = {};
+  history.forEach((h) => (byDay[h.date] = h.profit));
+
+  const days = Array.from({ length: today }, (_, i) => i + 1);
+  const daily = days.map((d) => {
+    const key = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    return byDay[key] ?? 0;
+  });
+
+  let running = 0;
+  const cumulative = daily.map((v) => (running += v));
+
+  const monthTotal = cumulative[cumulative.length - 1] ?? 0;
+  const hasData = history.length > 0;
+
+  const W = 700, H = 200, PAD = 28;
+  const maxAbs = Math.max(1, ...daily.map((v) => Math.abs(v)));
+  const barW = (W - PAD * 2) / days.length;
+
+  const barY = (v: number) => H / 2 - (v / maxAbs) * (H / 2 - PAD / 2);
+
+  const cumMin = Math.min(0, ...cumulative);
+  const cumMax = Math.max(0, ...cumulative);
+  const cumRange = cumMax - cumMin || 1;
+  const lineY = (v: number) => H - PAD - ((v - cumMin) / cumRange) * (H - PAD * 1.5);
+  const linePoints = cumulative
+    .map((v, i) => `${PAD + barW * i + barW / 2},${lineY(v)}`)
+    .join(" ");
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-medium">กำไร/ขาดทุนรายวัน เดือนนี้</div>
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            <option value="all">ทุกพอร์ต</option>
+            {ACCOUNT_IDS.map((id) => (
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
+            ))}
+          </select>
+        </div>
+        <div className={`text-sm font-semibold ${monthTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+          {monthTotal >= 0 ? "+" : ""}{monthTotal.toFixed(2)} USD
+        </div>
+      </div>
+      {!hasData ? (
+        <div className="h-[200px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[200px]">
+          <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="var(--color-zinc-700, #3f3f46)" strokeWidth={1} />
+          {daily.map((v, i) => {
+            const x = PAD + barW * i + barW * 0.15;
+            const w = barW * 0.7;
+            const y = v >= 0 ? barY(v) : H / 2;
+            const h = Math.abs(barY(v) - H / 2);
+            return (
+              <rect
+                key={i}
+                x={x}
+                y={y}
+                width={Math.max(w, 1)}
+                height={Math.max(h, 1)}
+                fill={v >= 0 ? "#34d399" : "#f87171"}
+                opacity={0.75}
+              >
+                <title>{`${days[i]}: ${v >= 0 ? "+" : ""}${v.toFixed(2)} USD`}</title>
+              </rect>
+            );
+          })}
+          <polyline points={linePoints} fill="none" stroke="#60a5fa" strokeWidth={2} />
+        </svg>
+      )}
+      <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500">
+        <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-emerald-400/75" /> กำไรรายวัน</div>
+        <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-red-400/75" /> ขาดทุนรายวัน</div>
+        <div className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-blue-400" /> กำไรสะสม</div>
       </div>
     </div>
   );
