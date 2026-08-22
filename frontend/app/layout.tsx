@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Thai } from "next/font/google";
 import "./globals.css";
 
@@ -11,6 +11,18 @@ const ibmPlexSansThai = IBM_Plex_Sans_Thai({
 export const metadata: Metadata = {
   title: "EA Monitor",
   description: "MT5 EA Monitor",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "EA Monitor",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
