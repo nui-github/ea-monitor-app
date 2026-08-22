@@ -350,3 +350,67 @@ def get_symbol_stats(
         stats[d.symbol]["trades"] += 1
 
     return list(stats.values())
+
+
+@app.get("/api/balance_ops/{account_id}")
+def get_balance_ops(
+    account_id: int,
+    year: int = Query(...),
+    month: int = Query(...),
+):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return []
+
+    date_from = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        return []
+
+    result = []
+    for d in deals:
+        # DEAL_TYPE_BALANCE = 2: manual deposit/withdrawal (not a trade)
+        if d.type != 2:
+            continue
+        result.append({
+            "ticket": d.ticket,
+            "time": datetime.fromtimestamp(d.time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            "amount": d.profit,
+            "comment": d.comment,
+        })
+
+    result.sort(key=lambda x: x["time"])
+    return result
+
+
+@app.get("/api/balance_summary/{account_id}")
+def get_balance_summary(account_id: int):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return {"deposits": 0.0, "withdrawals": 0.0, "net": 0.0}
+
+    date_from = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    date_to = datetime.now(timezone.utc)
+
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        return {"deposits": 0.0, "withdrawals": 0.0, "net": 0.0}
+
+    deposits = 0.0
+    withdrawals = 0.0
+    for d in deals:
+        if d.type != 2:
+            continue
+        if d.profit >= 0:
+            deposits += d.profit
+        else:
+            withdrawals += d.profit
+
+    return {"deposits": deposits, "withdrawals": withdrawals, "net": deposits + withdrawals}

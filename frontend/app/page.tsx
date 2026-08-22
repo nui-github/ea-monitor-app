@@ -28,6 +28,9 @@ import {
   Waves,
   BarChart3,
   GitCompare,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Equal,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -176,6 +179,8 @@ function OverviewTab() {
       </div>
 
       <PerformanceCharts />
+
+      <DepositWithdrawalPanel />
 
       <div className="space-y-3">
         {data?.accounts.map((acc) => (
@@ -337,6 +342,176 @@ function useSymbolStats(accountId: number | "all", year: number, month: number) 
   }, [accountId, year, month]);
 
   return stats;
+}
+
+interface BalanceOp {
+  ticket: number;
+  time: string;
+  amount: number;
+  comment: string;
+}
+
+interface BalanceSummary {
+  deposits: number;
+  withdrawals: number;
+  net: number;
+}
+
+const EMPTY_SUMMARY: BalanceSummary = { deposits: 0, withdrawals: 0, net: 0 };
+
+function useBalanceData() {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [accountId, setAccountId] = useState<number | "all">("all");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [ops, setOps] = useState<(BalanceOp & { accountId: number })[]>([]);
+  const [summaries, setSummaries] = useState<Record<number, BalanceSummary>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/balance_summary/${id}`)
+          .then((r) => (r.ok ? r.json() : EMPTY_SUMMARY))
+          .catch(() => EMPTY_SUMMARY)
+          .then((s: BalanceSummary) => [id, s] as [number, BalanceSummary])
+      )
+    ).then((entries) => setSummaries(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/balance_ops/${id}?year=${year}&month=${month}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as BalanceOp[])
+          .then((list: BalanceOp[]) => list.map((o) => ({ ...o, accountId: id })))
+      )
+    ).then((results) => {
+      setOps(results.flat().sort((a, b) => a.time.localeCompare(b.time)));
+    });
+  }, [accountId, year, month]);
+
+  const prevMonth = () => {
+    if (month === 1) { setYear((y) => y - 1); setMonth(12); }
+    else setMonth((m) => m - 1);
+  };
+  const nextMonth = () => {
+    if (month === 12) { setYear((y) => y + 1); setMonth(1); }
+    else setMonth((m) => m + 1);
+  };
+  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+  const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
+
+  return {
+    year, month, accountId, setAccountId, accountLabels, ops, summaries,
+    prevMonth, nextMonth, goToday, isCurrentMonth, monthName,
+  };
+}
+
+function DepositWithdrawalPanel() {
+  const b = useBalanceData();
+
+  const activeAccounts = b.accountId === "all" ? ACCOUNT_IDS : [b.accountId];
+  const lifetimeDeposits = activeAccounts.reduce((s, id) => s + (b.summaries[id]?.deposits ?? 0), 0);
+  const lifetimeWithdrawals = activeAccounts.reduce((s, id) => s + (b.summaries[id]?.withdrawals ?? 0), 0);
+  const lifetimeNet = lifetimeDeposits + lifetimeWithdrawals;
+
+  const monthDeposits = b.ops.filter((o) => o.amount >= 0).reduce((s, o) => s + o.amount, 0);
+  const monthWithdrawals = b.ops.filter((o) => o.amount < 0).reduce((s, o) => s + o.amount, 0);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <Landmark className="h-4 w-4" />
+          เงินฝาก-ถอน
+        </div>
+        <select
+          value={b.accountId}
+          onChange={(e) => b.setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
+          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+        >
+          <option value="all">ทุกพอร์ต</option>
+          {ACCOUNT_IDS.map((id) => (
+            <option key={id} value={id}>{b.accountLabels[id] ?? `Account ${id}`}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><ArrowDownToLine className="h-3.5 w-3.5 text-emerald-400" /> ฝากทั้งหมด</div>
+          <div className="text-lg font-semibold mt-1 text-emerald-400">+{lifetimeDeposits.toFixed(2)}</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><ArrowUpFromLine className="h-3.5 w-3.5 text-red-400" /> ถอนทั้งหมด</div>
+          <div className="text-lg font-semibold mt-1 text-red-400">{lifetimeWithdrawals.toFixed(2)}</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Equal className="h-3.5 w-3.5" /> สุทธิ</div>
+          <div className={`text-lg font-semibold mt-1 ${lifetimeNet >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {lifetimeNet >= 0 ? "+" : ""}{lifetimeNet.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <div className="flex items-center gap-2">
+          <button onClick={b.prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
+          <span className="text-sm font-medium min-w-32 text-center">{b.monthName}</span>
+          <button onClick={b.nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
+          {!b.isCurrentMonth && (
+            <button onClick={b.goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
+              <RotateCcw className="h-3.5 w-3.5" /> วันนี้
+            </button>
+          )}
+        </div>
+        <div className="text-xs text-zinc-400">
+          ฝาก <span className="text-emerald-400 font-medium">+{monthDeposits.toFixed(2)}</span>
+          {" · "}
+          ถอน <span className="text-red-400 font-medium">{monthWithdrawals.toFixed(2)}</span>
+        </div>
+      </div>
+
+      {b.ops.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-4 text-center">ไม่มีรายการฝาก-ถอนเดือนนี้</div>
+      ) : (
+        <div className="max-h-56 overflow-y-auto space-y-1">
+          {b.ops.map((o) => (
+            <div key={`${o.accountId}-${o.ticket}`} className="flex items-center gap-3 text-sm py-1.5 border-b border-zinc-800 last:border-0">
+              {o.amount >= 0 ? (
+                <ArrowDownToLine className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <ArrowUpFromLine className="h-3.5 w-3.5 text-red-400 shrink-0" />
+              )}
+              <span className="text-zinc-400 text-xs w-32 shrink-0">{o.time}</span>
+              {b.accountId === "all" && (
+                <span className="text-xs text-zinc-500 shrink-0">{b.accountLabels[o.accountId] ?? o.accountId}</span>
+              )}
+              <span className="text-zinc-500 text-xs truncate flex-1">{o.comment}</span>
+              <span className={`font-medium shrink-0 ${o.amount >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {o.amount >= 0 ? "+" : ""}{o.amount.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function chartScales(cumulative: number[], days: number[]) {
