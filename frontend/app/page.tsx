@@ -197,17 +197,43 @@ function CalendarTab() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [accountId, setAccountId] = useState(1);
+  const [accountId, setAccountId] = useState<number | "all">("all");
   const [history, setHistory] = useState<DayHistory[]>([]);
   const [loading, setLoading] = useState(false);
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
 
   useEffect(() => {
     setLoading(true);
-    apiFetch(`/api/history/${accountId}?year=${year}&month=${month}`)
-      .then((r) => r.json())
-      .then((d) => setHistory(d))
-      .catch(() => setHistory([]))
-      .finally(() => setLoading(false));
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
+          .then((r) => r.json())
+          .catch(() => [] as DayHistory[])
+      )
+    ).then((results) => {
+      const merged: Record<string, DayHistory> = {};
+      results.flat().forEach((h: DayHistory) => {
+        if (merged[h.date]) {
+          merged[h.date].profit += h.profit;
+          merged[h.date].trades += h.trades;
+        } else {
+          merged[h.date] = { ...h };
+        }
+      });
+      setHistory(Object.values(merged));
+    }).finally(() => setLoading(false));
   }, [accountId, year, month]);
 
   const byDay: Record<string, DayHistory> = {};
@@ -229,8 +255,10 @@ function CalendarTab() {
     if (month === 12) { setYear(y => y + 1); setMonth(1); }
     else setMonth(m => m + 1);
   };
+  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
 
   const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
 
   return (
     <div className="space-y-4">
@@ -238,11 +266,12 @@ function CalendarTab() {
         <div className="flex items-center gap-2">
           <select
             value={accountId}
-            onChange={(e) => setAccountId(Number(e.target.value))}
+            onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
             className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm"
           >
+            <option value="all">ทุกพอร์ต</option>
             {ACCOUNT_IDS.map((id) => (
-              <option key={id} value={id}>Account {id}</option>
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
             ))}
           </select>
         </div>
@@ -250,6 +279,9 @@ function CalendarTab() {
           <button onClick={prevMonth} className="px-2 py-1 rounded hover:bg-zinc-800">‹</button>
           <span className="text-sm font-medium min-w-36 text-center">{monthName}</span>
           <button onClick={nextMonth} className="px-2 py-1 rounded hover:bg-zinc-800">›</button>
+          {!isCurrentMonth && (
+            <button onClick={goToday} className="px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">วันนี้</button>
+          )}
         </div>
       </div>
 

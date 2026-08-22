@@ -112,7 +112,7 @@ def get_account(account_id: int):
     info = mt5.account_info()
     if info is None:
         raise HTTPException(status_code=503, detail="Unable to fetch account info")
-    trade_modes = {0: "Real", 1: "Demo", 2: "Contest"}
+    trade_modes = {0: "Demo", 1: "Contest", 2: "Real"}
     return {
         "balance": info.balance,
         "equity": info.equity,
@@ -250,7 +250,7 @@ def get_overview():
             info = mt5.account_info()
             positions = mt5.positions_get() or []
             profit = sum(p.profit for p in positions)
-            trade_modes = {0: "Real", 1: "Demo", 2: "Contest"}
+            trade_modes = {0: "Demo", 1: "Contest", 2: "Real"}
             accounts.append({
                 "account_id": account_id,
                 "login": info.login,
