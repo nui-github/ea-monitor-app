@@ -1,6 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  Activity,
+  LayoutDashboard,
+  Wallet,
+  CalendarDays,
+  TrendingUp,
+  TrendingDown,
+  ListOrdered,
+  DollarSign,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
+  Wifi,
+  WifiOff,
+  Scale,
+  Landmark,
+  Gauge,
+  Bot,
+  OctagonX,
+  AlertTriangle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Repeat,
+  Target,
+} from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
 
@@ -73,21 +98,28 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans">
       <header className="flex items-center gap-6 px-6 py-4 border-b border-zinc-800">
-        <h1 className="text-xl font-semibold shrink-0">EA Monitor</h1>
+        <h1 className="text-xl font-semibold shrink-0 flex items-center gap-2">
+          <Activity className="h-5 w-5 text-emerald-400" />
+          EA Monitor
+        </h1>
         <nav className="flex gap-1">
-          {(["overview", "positions", "calendar"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-1.5 rounded text-sm capitalize transition-colors ${
-                tab === t
-                  ? "bg-zinc-700 text-white"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              {t === "overview" ? "ภาพรวม" : t === "positions" ? "พอร์ต" : "Calendar"}
-            </button>
-          ))}
+          {(["overview", "positions", "calendar"] as Tab[]).map((t) => {
+            const Icon = t === "overview" ? LayoutDashboard : t === "positions" ? Wallet : CalendarDays;
+            return (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors ${
+                  tab === t
+                    ? "bg-zinc-700 text-white"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {t === "overview" ? "ภาพรวม" : t === "positions" ? "พอร์ต" : "Calendar"}
+              </button>
+            );
+          })}
         </nav>
       </header>
 
@@ -128,10 +160,16 @@ function OverviewTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="พอร์ต" value={String(ACCOUNT_IDS.length)} sub="พอร์ตเชื่อมต่อ" />
-        <StatCard label="ออเดอร์เปิด" value={String(data?.total_open_positions ?? "—")} sub="รวมทุกบัญชี" />
-        <StatCard label="Balance รวม" value={data ? `${data.total_balance.toFixed(2)}` : "—"} sub="USD" />
-        <StatCard label="กำไร/ขาดทุนลอยตัว" value={data ? `${profit >= 0 ? "+" : ""}${profit.toFixed(2)}` : "—"} sub="USD" accent={data ? (profit >= 0 ? "green" : "red") : undefined} />
+        <StatCard label="พอร์ต" value={String(ACCOUNT_IDS.length)} sub="พอร์ตเชื่อมต่อ" icon={Wallet} />
+        <StatCard label="ออเดอร์เปิด" value={String(data?.total_open_positions ?? "—")} sub="รวมทุกบัญชี" icon={ListOrdered} />
+        <StatCard label="Balance รวม" value={data ? `${data.total_balance.toFixed(2)}` : "—"} sub="USD" icon={DollarSign} />
+        <StatCard
+          label="กำไร/ขาดทุนลอยตัว"
+          value={data ? `${profit >= 0 ? "+" : ""}${profit.toFixed(2)}` : "—"}
+          sub="USD"
+          accent={data ? (profit >= 0 ? "green" : "red") : undefined}
+          icon={profit >= 0 ? TrendingUp : TrendingDown}
+        />
       </div>
 
       <PnLChart />
@@ -141,14 +179,14 @@ function OverviewTab() {
           <div key={acc.account_id} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
             {acc.error ? (
               <div className="flex items-center gap-2 text-zinc-500">
-                <span className="h-2 w-2 rounded-full bg-red-500" />
+                <WifiOff className="h-4 w-4" />
                 <span>Account {acc.account_id} — Offline</span>
               </div>
             ) : (
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    <Wifi className="h-3.5 w-3.5 text-emerald-500" />
                     <span className="font-medium">{acc.company} · #{acc.login}</span>
                     <span className={`text-xs px-1.5 py-0.5 rounded ${acc.trade_mode === "Demo" ? "bg-yellow-900 text-yellow-300" : "bg-emerald-900 text-emerald-300"}`}>{acc.trade_mode}</span>
                   </div>
@@ -265,7 +303,14 @@ function PnLChart() {
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
       <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="text-sm font-medium">กำไรสะสม เดือนนี้</div>
+          <div className="text-sm font-medium flex items-center gap-1.5">
+            {monthTotal >= 0 ? (
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <TrendingDown className="h-4 w-4 text-red-400" />
+            )}
+            กำไรสะสม เดือนนี้
+          </div>
           <select
             value={accountId}
             onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
@@ -324,10 +369,13 @@ function PnLChart() {
   );
 }
 
-function StatCard({ label, value, sub, accent }: { label: string; value: string; sub: string; accent?: "green" | "red" }) {
+function StatCard({ label, value, sub, accent, icon: Icon }: { label: string; value: string; sub: string; accent?: "green" | "red"; icon?: React.ComponentType<{ className?: string }> }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="text-xs text-zinc-400">{label}</div>
+      <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+        {Icon && <Icon className="h-3.5 w-3.5" />}
+        {label}
+      </div>
       <div className={`text-2xl font-semibold mt-1 ${accent === "green" ? "text-emerald-400" : accent === "red" ? "text-red-400" : ""}`}>{value}</div>
       <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>
     </div>
@@ -419,28 +467,33 @@ function CalendarTab() {
           </select>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={prevMonth} className="px-2 py-1 rounded hover:bg-zinc-800">‹</button>
+          <button onClick={prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
           <span className="text-sm font-medium min-w-36 text-center">{monthName}</span>
-          <button onClick={nextMonth} className="px-2 py-1 rounded hover:bg-zinc-800">›</button>
+          <button onClick={nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
           {!isCurrentMonth && (
-            <button onClick={goToday} className="px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">วันนี้</button>
+            <button onClick={goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
+              <RotateCcw className="h-3.5 w-3.5" /> วันนี้
+            </button>
           )}
         </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="text-xs text-zinc-400">กำไรเดือนนี้</div>
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+            {monthProfit >= 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+            กำไรเดือนนี้
+          </div>
           <div className={`text-xl font-semibold mt-1 ${monthProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
             {monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(2)} USD
           </div>
         </div>
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="text-xs text-zinc-400">จำนวน Trades</div>
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Repeat className="h-3.5 w-3.5" /> จำนวน Trades</div>
           <div className="text-xl font-semibold mt-1">{tradeCount}</div>
         </div>
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="text-xs text-zinc-400">วันกำไร / วันขาดทุน</div>
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Target className="h-3.5 w-3.5" /> วันกำไร / วันขาดทุน</div>
           <div className="text-xl font-semibold mt-1">
             <span className="text-emerald-400">{winDays}</span>
             <span className="text-zinc-500"> / </span>
@@ -562,20 +615,22 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
           )}
         </div>
         <div className="flex items-center gap-2 mt-1">
-          <span className={`h-2.5 w-2.5 rounded-full ${online ? "bg-emerald-500" : "bg-red-500"}`} />
+          {online ? <Wifi className="h-4 w-4 text-emerald-500" /> : <WifiOff className="h-4 w-4 text-red-500" />}
           <span className="text-sm text-zinc-400">{online ? "Connected" : "Offline"}</span>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <SummaryCard label="Balance" value={account?.balance} currency={account?.currency} />
-        <SummaryCard label="Equity" value={account?.equity} currency={account?.currency} />
-        <SummaryCard label="Free Margin" value={account?.free_margin} currency={account?.currency} />
-        <SummaryCard label="Margin Level" value={account?.margin_level} suffix="%" />
+        <SummaryCard label="Balance" value={account?.balance} currency={account?.currency} icon={Wallet} />
+        <SummaryCard label="Equity" value={account?.equity} currency={account?.currency} icon={Scale} />
+        <SummaryCard label="Free Margin" value={account?.free_margin} currency={account?.currency} icon={Landmark} />
+        <SummaryCard label="Margin Level" value={account?.margin_level} suffix="%" icon={Gauge} />
       </div>
 
       <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
-        <h3 className="px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800">Open Positions</h3>
+        <h3 className="px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center gap-2">
+          <ListOrdered className="h-4 w-4" /> Open Positions
+        </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -599,7 +654,10 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
                   <tr key={p.ticket} className="border-t border-zinc-800">
                     <td className="px-4 py-2">{p.ticket}</td>
                     <td className="px-4 py-2 font-medium text-zinc-200">{p.symbol}</td>
-                    <td className={`px-4 py-2 font-medium ${p.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>{p.type}</td>
+                    <td className={`px-4 py-2 font-medium flex items-center gap-1 ${p.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>
+                      {p.type === "BUY" ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+                      {p.type}
+                    </td>
                     <td className="px-4 py-2">{p.volume}</td>
                     <td className="px-4 py-2">{p.price_open}</td>
                     <td className="px-4 py-2">{p.price_current}</td>
@@ -618,20 +676,25 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
 
       <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-zinc-300">EA Auto-Trading</span>
+          <span className="text-sm font-medium text-zinc-300 flex items-center gap-1.5">
+            <Bot className="h-4 w-4" /> EA Auto-Trading
+          </span>
           <button onClick={handleEaToggle} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${eaEnabled ? "bg-emerald-500" : "bg-zinc-700"}`}>
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${eaEnabled ? "translate-x-6" : "translate-x-1"}`} />
           </button>
         </div>
-        <button onClick={() => setShowConfirm(true)} className="rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          Close All XAUUSD
+        <button onClick={() => setShowConfirm(true)} className="flex items-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <OctagonX className="h-4 w-4" /> Close All XAUUSD
         </button>
       </div>
 
       {showConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-semibold mb-2">Confirm Panic Close — {label}</h3>
+            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-400" />
+              Confirm Panic Close — {label}
+            </h3>
             <p className="text-sm text-zinc-400 mb-6">ปิดทุก position บน {label} ที่ราคาตลาด ไม่สามารถยกเลิกได้</p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setShowConfirm(false)} className="px-4 py-2 text-sm rounded-md bg-zinc-800 hover:bg-zinc-700">Cancel</button>
@@ -646,10 +709,13 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   );
 }
 
-function SummaryCard({ label, value, currency, suffix }: { label: string; value?: number; currency?: string; suffix?: string }) {
+function SummaryCard({ label, value, currency, suffix, icon: Icon }: { label: string; value?: number; currency?: string; suffix?: string; icon?: React.ComponentType<{ className?: string }> }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <p className="text-sm text-zinc-400">{label}</p>
+      <p className="text-sm text-zinc-400 flex items-center gap-1.5">
+        {Icon && <Icon className="h-4 w-4" />}
+        {label}
+      </p>
       <p className="text-2xl font-semibold mt-1">
         {value !== undefined
           ? `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix ?? (currency ? ` ${currency}` : "")}`

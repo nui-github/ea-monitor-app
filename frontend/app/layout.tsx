@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { Noto_Sans_Thai } from "next/font/google";
+import { IBM_Plex_Sans_Thai } from "next/font/google";
 import "./globals.css";
 
-const notoSansThai = Noto_Sans_Thai({
-  variable: "--font-noto-sans-thai",
+const ibmPlexSansThai = IBM_Plex_Sans_Thai({
+  variable: "--font-ibm-plex-sans-thai",
   subsets: ["thai", "latin"],
   weight: ["300", "400", "500", "600", "700"],
 });
@@ -21,10 +21,10 @@ export default function RootLayout({
   return (
     <html
       lang="th"
-      className={`${notoSansThai.variable} h-full antialiased`}
+      className={`${ibmPlexSansThai.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-[var(--font-noto-sans-thai)]">{children}</body>
+      <body className="min-h-full flex flex-col font-[var(--font-ibm-plex-sans-thai)]">{children}</body>
     </html>
   );
 }

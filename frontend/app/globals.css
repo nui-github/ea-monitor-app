@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-noto-sans-thai);
-  --font-mono: var(--font-noto-sans-thai);
+  --font-sans: var(--font-ibm-plex-sans-thai);
+  --font-mono: var(--font-ibm-plex-sans-thai);
 }
