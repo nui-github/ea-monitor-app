@@ -32,6 +32,8 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Equal,
+  History,
+  X,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -938,6 +940,18 @@ function StatCard({ label, value, sub, accent, icon: Icon }: { label: string; va
 
 // ─── Calendar Tab ─────────────────────────────────────────────────────────────
 
+interface TradeRecord {
+  ticket: number;
+  symbol: string;
+  type: "BUY" | "SELL";
+  volume: number;
+  open_time: string | null;
+  open_price: number | null;
+  close_time: string;
+  close_price: number;
+  profit: number;
+}
+
 function CalendarTab() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -946,6 +960,9 @@ function CalendarTab() {
   const [history, setHistory] = useState<DayHistory[]>([]);
   const [loading, setLoading] = useState(false);
   const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [trades, setTrades] = useState<(TradeRecord & { accountId: number })[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
 
   useEffect(() => {
     Promise.all(
@@ -980,6 +997,26 @@ function CalendarTab() {
       setHistory(Object.values(merged));
     }).finally(() => setLoading(false));
   }, [accountId, year, month]);
+
+  useEffect(() => {
+    setSelectedDay(null);
+  }, [accountId, year, month]);
+
+  useEffect(() => {
+    if (selectedDay === null) return;
+    setTradesLoading(true);
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/trades/${id}?year=${year}&month=${month}&day=${selectedDay}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as TradeRecord[])
+          .then((list: TradeRecord[]) => list.map((t) => ({ ...t, accountId: id })))
+      )
+    ).then((results) => {
+      setTrades(results.flat().sort((a, b) => a.close_time.localeCompare(b.close_time)));
+    }).finally(() => setTradesLoading(false));
+  }, [selectedDay, accountId, year, month]);
 
   const byDay: Record<string, DayHistory> = {};
   history.forEach((h) => (byDay[h.date] = h));
@@ -1071,10 +1108,14 @@ function CalendarTab() {
             const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const data = byDay[dateKey];
             const isToday = dateKey === new Date().toISOString().split("T")[0];
+            const isSelected = selectedDay === day;
             return (
-              <div
+              <button
                 key={day}
-                className={`min-h-16 p-1.5 border-b border-r border-zinc-800 last:border-r-0 ${
+                onClick={() => setSelectedDay(isSelected ? null : day)}
+                className={`min-h-16 p-1.5 border-b border-r border-zinc-800 last:border-r-0 text-left transition-colors hover:bg-zinc-800/60 ${
+                  isSelected ? "ring-2 ring-inset ring-emerald-500" : ""
+                } ${
                   data
                     ? data.profit > 0
                       ? "bg-emerald-950/40"
@@ -1091,12 +1132,130 @@ function CalendarTab() {
                     <div className="text-zinc-500 text-xs">{data.trades} trades</div>
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
       </div>
       {loading && <div className="text-center text-zinc-500 text-sm py-2">Loading...</div>}
+
+      {selectedDay !== null && (
+        <DayTradesPanel
+          year={year}
+          month={month}
+          day={selectedDay}
+          trades={trades}
+          loading={tradesLoading}
+          accountId={accountId}
+          accountLabels={accountLabels}
+          onClose={() => setSelectedDay(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DayTradesPanel({
+  year,
+  month,
+  day,
+  trades,
+  loading,
+  accountId,
+  accountLabels,
+  onClose,
+}: {
+  year: number;
+  month: number;
+  day: number;
+  trades: (TradeRecord & { accountId: number })[];
+  loading: boolean;
+  accountId: number | "all";
+  accountLabels: Record<number, string>;
+  onClose: () => void;
+}) {
+  const dateLabel = new Date(year, month - 1, day).toLocaleString("th-TH", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const dayTotal = trades.reduce((s, t) => s + t.profit, 0);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <div className="text-sm font-medium flex items-center gap-2">
+          <History className="h-4 w-4" />
+          {dateLabel}
+        </div>
+        <div className="flex items-center gap-3">
+          {trades.length > 0 && (
+            <span className={`text-sm font-semibold ${dayTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+              {dayTotal >= 0 ? "+" : ""}{dayTotal.toFixed(2)} USD
+            </span>
+          )}
+          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-zinc-500 text-sm py-6">กำลังโหลด...</div>
+      ) : trades.length === 0 ? (
+        <div className="text-center text-zinc-500 text-sm py-6">ไม่มีรายการเทรดวันนี้</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-zinc-400 text-left">
+                <th className="px-4 py-2">Ticket</th>
+                {accountId === "all" && <th className="px-4 py-2">พอร์ต</th>}
+                <th className="px-4 py-2">Symbol</th>
+                <th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2">Volume</th>
+                <th className="px-4 py-2">เปิด</th>
+                <th className="px-4 py-2">ปิด</th>
+                <th className="px-4 py-2">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((t) => (
+                <tr key={`${t.accountId}-${t.ticket}`} className="border-t border-zinc-800">
+                  <td className="px-4 py-2 text-zinc-300">{t.ticket}</td>
+                  {accountId === "all" && (
+                    <td className="px-4 py-2 text-zinc-400 text-xs">{accountLabels[t.accountId] ?? t.accountId}</td>
+                  )}
+                  <td className="px-4 py-2 font-medium text-zinc-200">{t.symbol}</td>
+                  <td className={`px-4 py-2 font-medium flex items-center gap-1 ${t.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>
+                    {t.type === "BUY" ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+                    {t.type}
+                  </td>
+                  <td className="px-4 py-2">{t.volume}</td>
+                  <td className="px-4 py-2 text-xs text-zinc-400">
+                    {t.open_time ? (
+                      <>
+                        <div>{t.open_time.slice(11, 16)}</div>
+                        <div className="text-zinc-500">{t.open_price}</div>
+                      </>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-zinc-400">
+                    <div>{t.close_time.slice(11, 16)}</div>
+                    <div className="text-zinc-500">{t.close_price}</div>
+                  </td>
+                  <td className={`px-4 py-2 font-medium ${t.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {t.profit >= 0 ? "+" : ""}{t.profit.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

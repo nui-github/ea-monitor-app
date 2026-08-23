@@ -414,3 +414,67 @@ def get_balance_summary(account_id: int):
             withdrawals += d.profit
 
     return {"deposits": deposits, "withdrawals": withdrawals, "net": deposits + withdrawals}
+
+
+@app.get("/api/trades/{account_id}")
+def get_trades(
+    account_id: int,
+    year: int = Query(...),
+    month: int = Query(...),
+    day: int = Query(...),
+):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return []
+
+    date_from = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        return []
+
+    target_day = f"{year}-{month:02d}-{day:02d}"
+
+    # Group buy/sell deals by position, matching each close (entry=OUT) back to its open (entry=IN)
+    by_position: dict = {}
+    for d in deals:
+        if d.type not in (0, 1):  # skip balance/credit/etc, keep DEAL_TYPE_BUY/SELL only
+            continue
+        pos = by_position.setdefault(d.position_id, {"entry": None, "exits": []})
+        if d.entry == 0:
+            pos["entry"] = d
+        elif d.entry == 1:
+            dt = datetime.fromtimestamp(d.time, tz=timezone.utc)
+            if dt.strftime("%Y-%m-%d") == target_day:
+                pos["exits"].append(d)
+
+    trades = []
+    for position_id, info in by_position.items():
+        exits = info["exits"]
+        if not exits:
+            continue
+        entry = info["entry"]
+        last_exit = max(exits, key=lambda e: e.time)
+        total_profit = sum(e.profit + e.commission + e.swap for e in exits)
+        total_volume = sum(e.volume for e in exits)
+        direction = ("BUY" if entry.type == 0 else "SELL") if entry else ("SELL" if last_exit.type == 0 else "BUY")
+
+        trades.append({
+            "ticket": position_id,
+            "symbol": last_exit.symbol,
+            "type": direction,
+            "volume": total_volume,
+            "open_time": datetime.fromtimestamp(entry.time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if entry else None,
+            "open_price": entry.price if entry else None,
+            "close_time": datetime.fromtimestamp(last_exit.time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "close_price": last_exit.price,
+            "profit": total_profit,
+        })
+
+    trades.sort(key=lambda t: t["close_time"])
+    return trades
