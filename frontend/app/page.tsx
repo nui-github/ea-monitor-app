@@ -1069,23 +1069,32 @@ function CalendarTab() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-xs text-zinc-400">
-            {monthProfit >= 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-            กำไรเดือนนี้
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            {monthProfit >= 0 ? <TrendingUp className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" /> : <TrendingDown className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />}
+            <span className="truncate">กำไรเดือนนี้</span>
           </div>
-          <div className={`text-xl font-semibold mt-1 ${monthProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-            {monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(2)} USD
+          <div className={`text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1 truncate ${monthProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            <span className="sm:hidden">{monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(0)}</span>
+            <span className="hidden sm:inline">{monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(2)} USD</span>
           </div>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Repeat className="h-3.5 w-3.5" /> จำนวน Trades</div>
-          <div className="text-xl font-semibold mt-1">{tradeCount}</div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            <Repeat className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />
+            <span className="sm:hidden truncate">Trades</span>
+            <span className="hidden sm:inline truncate">จำนวน Trades</span>
+          </div>
+          <div className="text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1">{tradeCount}</div>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Target className="h-3.5 w-3.5" /> วันกำไร / วันขาดทุน</div>
-          <div className="text-xl font-semibold mt-1">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            <Target className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />
+            <span className="sm:hidden truncate">กำไร/ขาดทุน</span>
+            <span className="hidden sm:inline truncate">วันกำไร / วันขาดทุน</span>
+          </div>
+          <div className="text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1">
             <span className="text-emerald-400">{winDays}</span>
             <span className="text-zinc-500"> / </span>
             <span className="text-red-400">{loseDays}</span>
@@ -1113,7 +1122,7 @@ function CalendarTab() {
               <button
                 key={day}
                 onClick={() => setSelectedDay(isSelected ? null : day)}
-                className={`min-h-16 p-1.5 rounded-lg text-left transition-colors hover:bg-zinc-800 ${
+                className={`min-h-16 p-1 sm:p-1.5 rounded-lg text-left transition-colors hover:bg-zinc-800 overflow-hidden ${
                   isSelected ? "ring-2 ring-emerald-500" : ""
                 } ${
                   data
@@ -1123,13 +1132,18 @@ function CalendarTab() {
                     : "bg-zinc-800/40"
                 }`}
               >
-                <div className={`text-xs font-medium ${isToday ? "text-emerald-400" : "text-zinc-400"}`}>{day}</div>
+                <div className={`text-[10px] sm:text-xs font-medium ${isToday ? "text-emerald-400" : "text-zinc-400"}`}>{day}</div>
                 {data && (
-                  <div className="mt-1">
-                    <div className={`text-xs font-semibold ${data.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {data.profit >= 0 ? "+" : ""}{data.profit.toFixed(2)}
+                  <div className="mt-0.5 sm:mt-1 w-full">
+                    <div className={`text-[9px] sm:text-xs font-semibold truncate ${data.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      <span className="sm:hidden">{data.profit >= 0 ? "+" : ""}{data.profit.toFixed(0)}</span>
+                      <span className="hidden sm:inline">{data.profit >= 0 ? "+" : ""}{data.profit.toFixed(2)}</span>
                     </div>
-                    <div className="text-zinc-500 text-xs">{data.trades} trades</div>
+                    <div className="text-zinc-500 text-[9px] sm:text-xs truncate flex items-center gap-0.5">
+                      <Repeat className="h-2.5 w-2.5 sm:hidden" />
+                      <span className="sm:hidden">{data.trades}</span>
+                      <span className="hidden sm:inline">{data.trades} trades</span>
+                    </div>
                   </div>
                 )}
               </button>
@@ -1382,12 +1396,12 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
         </div>
       </div>
 
-      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-center justify-end gap-3">
-        <button onClick={() => setConfirmAction("profitable")} className="flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          <PiggyBank className="h-4 w-4" /> Close Profitable
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-3">
+        <button onClick={() => setConfirmAction("profitable")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <PiggyBank className="h-4 w-4 shrink-0" /> Close Profitable
         </button>
-        <button onClick={() => setConfirmAction("all")} className="flex items-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          <OctagonX className="h-4 w-4" /> Close All Positions
+        <button onClick={() => setConfirmAction("all")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <OctagonX className="h-4 w-4 shrink-0" /> Close All Positions
         </button>
       </div>
 
