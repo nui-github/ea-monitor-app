@@ -1093,15 +1093,15 @@ function CalendarTab() {
         </div>
       </div>
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="grid grid-cols-7 border-b border-zinc-800">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+        <div className="grid grid-cols-7 gap-1.5 mb-1.5">
           {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d) => (
-            <div key={d} className="text-center text-xs text-zinc-500 py-2">{d}</div>
+            <div key={d} className="text-center text-xs text-zinc-500 py-1">{d}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7">
+        <div className="grid grid-cols-7 gap-1.5">
           {Array.from({ length: firstDay }).map((_, i) => (
-            <div key={`e${i}`} className="min-h-16 border-b border-r border-zinc-800 last:border-r-0" />
+            <div key={`e${i}`} className="min-h-16" />
           ))}
           {Array.from({ length: daysInMonth }).map((_, i) => {
             const day = i + 1;
@@ -1113,14 +1113,14 @@ function CalendarTab() {
               <button
                 key={day}
                 onClick={() => setSelectedDay(isSelected ? null : day)}
-                className={`min-h-16 p-1.5 border-b border-r border-zinc-800 last:border-r-0 text-left transition-colors hover:bg-zinc-800/60 ${
-                  isSelected ? "ring-2 ring-inset ring-emerald-500" : ""
+                className={`min-h-16 p-1.5 rounded-lg text-left transition-colors hover:bg-zinc-800 ${
+                  isSelected ? "ring-2 ring-emerald-500" : ""
                 } ${
                   data
                     ? data.profit > 0
                       ? "bg-emerald-950/40"
                       : "bg-red-950/40"
-                    : ""
+                    : "bg-zinc-800/40"
                 }`}
               >
                 <div className={`text-xs font-medium ${isToday ? "text-emerald-400" : "text-zinc-400"}`}>{day}</div>
@@ -1327,13 +1327,19 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 mt-1">
-          {online ? <Wifi className="h-4 w-4 text-emerald-500" /> : <WifiOff className="h-4 w-4 text-red-500" />}
-          <span className="text-sm text-zinc-400">{online ? "Connected" : "Offline"}</span>
+        <div className="mt-1">
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full ${
+              online ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300"
+            }`}
+          >
+            {online ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            {online ? "Connected" : "Offline"}
+          </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <SummaryCard label="Balance" value={account?.balance} currency={account?.currency} icon={Wallet} />
         <SummaryCard label="Equity" value={account?.equity} currency={account?.currency} icon={Scale} />
         <SummaryCard label="Free Margin" value={account?.free_margin} currency={account?.currency} icon={Landmark} />
@@ -1424,12 +1430,12 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
 
 function SummaryCard({ label, value, currency, suffix, icon: Icon }: { label: string; value?: number; currency?: string; suffix?: string; icon?: React.ComponentType<{ className?: string }> }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <p className="text-sm text-zinc-400 flex items-center gap-1.5">
-        {Icon && <Icon className="h-4 w-4" />}
-        {label}
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 sm:p-4">
+      <p className="text-xs sm:text-sm text-zinc-400 flex items-center gap-1.5">
+        {Icon && <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />}
+        <span className="truncate">{label}</span>
       </p>
-      <p className="text-2xl font-semibold mt-1">
+      <p className="text-base sm:text-2xl font-semibold mt-1 whitespace-nowrap overflow-hidden text-ellipsis">
         {value !== undefined
           ? `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix ?? (currency ? ` ${currency}` : "")}`
           : "—"}
