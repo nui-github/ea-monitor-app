@@ -19,7 +19,6 @@ import {
   Scale,
   Landmark,
   Gauge,
-  Bot,
   OctagonX,
   AlertTriangle,
   ArrowUpRight,
@@ -34,6 +33,7 @@ import {
   Equal,
   History,
   X,
+  PiggyBank,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -1266,8 +1266,7 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   const [account, setAccount] = useState<Account | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [online, setOnline] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [eaEnabled, setEaEnabled] = useState(true);
+  const [confirmAction, setConfirmAction] = useState<"all" | "profitable" | null>(null);
   const [closing, setClosing] = useState(false);
 
   useEffect(() => {
@@ -1290,26 +1289,16 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
     return () => clearInterval(interval);
   }, [accountId]);
 
-  const handleEaToggle = async () => {
-    const next = !eaEnabled;
-    try {
-      await apiFetch(`/api/ea_toggle/${accountId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      setEaEnabled(next);
-    } catch {}
-  };
-
-  const handleCloseAll = async () => {
+  const handleClose = async () => {
+    if (!confirmAction) return;
     setClosing(true);
     try {
-      await apiFetch(`/api/close_all/${accountId}`, { method: "POST" });
+      const endpoint = confirmAction === "all" ? "close_all" : "close_profitable";
+      await apiFetch(`/api/${endpoint}/${accountId}`, { method: "POST" });
     } catch {}
     finally {
       setClosing(false);
-      setShowConfirm(false);
+      setConfirmAction(null);
     }
   };
 
@@ -1393,32 +1382,31 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
         </div>
       </div>
 
-      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-zinc-300 flex items-center gap-1.5">
-            <Bot className="h-4 w-4" /> EA Auto-Trading
-          </span>
-          <button onClick={handleEaToggle} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${eaEnabled ? "bg-emerald-500" : "bg-zinc-700"}`}>
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${eaEnabled ? "translate-x-6" : "translate-x-1"}`} />
-          </button>
-        </div>
-        <button onClick={() => setShowConfirm(true)} className="flex items-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          <OctagonX className="h-4 w-4" /> Close All XAUUSD
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-center justify-end gap-3">
+        <button onClick={() => setConfirmAction("profitable")} className="flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <PiggyBank className="h-4 w-4" /> Close Profitable
+        </button>
+        <button onClick={() => setConfirmAction("all")} className="flex items-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <OctagonX className="h-4 w-4" /> Close All Positions
         </button>
       </div>
 
-      {showConfirm && (
+      {confirmAction && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 max-w-sm w-full mx-4">
             <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-400" />
-              Confirm Panic Close — {label}
+              {confirmAction === "all" ? "Confirm Close All Positions" : "Confirm Close Profitable Positions"} — {label}
             </h3>
-            <p className="text-sm text-zinc-400 mb-6">ปิดทุก position บน {label} ที่ราคาตลาด ไม่สามารถยกเลิกได้</p>
+            <p className="text-sm text-zinc-400 mb-6">
+              {confirmAction === "all"
+                ? `ปิดทุก position บน ${label} ที่ราคาตลาด ไม่สามารถยกเลิกได้`
+                : `ปิดเฉพาะ position ที่กำไรอยู่บน ${label} ที่ราคาตลาด ไม่สามารถยกเลิกได้`}
+            </p>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setShowConfirm(false)} className="px-4 py-2 text-sm rounded-md bg-zinc-800 hover:bg-zinc-700">Cancel</button>
-              <button onClick={handleCloseAll} disabled={closing} className="px-4 py-2 text-sm rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-50 font-semibold">
-                {closing ? "Closing..." : "Yes, Close All"}
+              <button onClick={() => setConfirmAction(null)} className="px-4 py-2 text-sm rounded-md bg-zinc-800 hover:bg-zinc-700">Cancel</button>
+              <button onClick={handleClose} disabled={closing} className="px-4 py-2 text-sm rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-50 font-semibold">
+                {closing ? "Closing..." : "Yes, Close"}
               </button>
             </div>
           </div>

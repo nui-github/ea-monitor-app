@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from datetime import datetime, timezone
 
 try:
@@ -9,8 +8,6 @@ try:
 except ImportError:
     mt5 = None
     MOCK_MODE = True
-
-SYMBOL = "XAUUSDm"
 
 # Two MT5 terminal installations on the VPS, each logged into its own account.
 ACCOUNT_PATHS = {
@@ -29,7 +26,6 @@ app.add_middleware(
 )
 
 # In-memory state for mock mode
-_mock_ea_enabled = {1: True, 2: True}
 _mock_positions = {
     1: [
         {
@@ -165,29 +161,17 @@ def get_positions(account_id: int):
     return result
 
 
-@app.post("/api/close_all/{account_id}")
-def close_all(account_id: int):
-    ensure_connection(account_id)
-
-    if MOCK_MODE:
-        closed = len(_mock_positions[account_id])
-        _mock_positions[account_id].clear()
-        return {"closed": closed, "errors": []}
-
-    positions = mt5.positions_get(symbol=SYMBOL)
-    if positions is None or len(positions) == 0:
-        return {"closed": 0, "errors": []}
-
+def _close_positions(positions):
     closed = 0
     errors = []
     for pos in positions:
         order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        tick = mt5.symbol_info_tick(SYMBOL)
+        tick = mt5.symbol_info_tick(pos.symbol)
         price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": SYMBOL,
+            "symbol": pos.symbol,
             "volume": pos.volume,
             "type": order_type,
             "position": pos.ticket,
@@ -207,31 +191,40 @@ def close_all(account_id: int):
     return {"closed": closed, "errors": errors}
 
 
-class EAToggleRequest(BaseModel):
-    enabled: bool
-
-
-@app.post("/api/ea_toggle/{account_id}")
-def ea_toggle(account_id: int, req: EAToggleRequest):
+@app.post("/api/close_all/{account_id}")
+def close_all(account_id: int):
     ensure_connection(account_id)
 
     if MOCK_MODE:
-        _mock_ea_enabled[account_id] = req.enabled
-        return {
-            "requested": req.enabled,
-            "trade_allowed": _mock_ea_enabled[account_id],
-            "note": "Mock mode (MetaTrader5 package unavailable on this OS).",
-        }
+        closed = len(_mock_positions[account_id])
+        _mock_positions[account_id].clear()
+        return {"closed": closed, "errors": []}
 
-    terminal = mt5.terminal_info()
-    if terminal is None:
-        raise HTTPException(status_code=503, detail="Unable to fetch terminal info")
+    positions = mt5.positions_get()
+    if positions is None or len(positions) == 0:
+        return {"closed": 0, "errors": []}
 
-    return {
-        "requested": req.enabled,
-        "trade_allowed": terminal.trade_allowed,
-        "note": "MT5 Python API cannot toggle AlgoTrading directly; enable it in the terminal settings.",
-    }
+    return _close_positions(positions)
+
+
+@app.post("/api/close_profitable/{account_id}")
+def close_profitable(account_id: int):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        profitable = [p for p in _mock_positions[account_id] if p["profit"] > 0]
+        _mock_positions[account_id] = [p for p in _mock_positions[account_id] if p["profit"] <= 0]
+        return {"closed": len(profitable), "errors": []}
+
+    positions = mt5.positions_get()
+    if positions is None or len(positions) == 0:
+        return {"closed": 0, "errors": []}
+
+    profitable = [p for p in positions if p.profit > 0]
+    if not profitable:
+        return {"closed": 0, "errors": []}
+
+    return _close_positions(profitable)
 
 
 @app.get("/api/overview")
