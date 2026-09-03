@@ -348,9 +348,11 @@ function OverviewTab() {
 
 function useMonthlyHistory() {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const today = now.getDate();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const today = isCurrentMonth ? now.getDate() : daysInMonth;
   const [history, setHistory] = useState<DayHistory[]>([]);
   const [accountId, setAccountId] = useState<number | "all">("all");
   const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
@@ -397,7 +399,21 @@ function useMonthlyHistory() {
   const cumulative = daily.map((v) => (running += v));
   const hasData = history.length > 0;
 
-  return { year, month, days, daily, cumulative, hasData, accountId, setAccountId, accountLabels };
+  const prevMonth = () => {
+    if (month === 1) { setYear((y) => y - 1); setMonth(12); }
+    else setMonth((m) => m - 1);
+  };
+  const nextMonth = () => {
+    if (month === 12) { setYear((y) => y + 1); setMonth(1); }
+    else setMonth((m) => m + 1);
+  };
+  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
+  const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
+
+  return {
+    year, month, days, daily, cumulative, hasData, accountId, setAccountId, accountLabels,
+    prevMonth, nextMonth, goToday, isCurrentMonth, monthName,
+  };
 }
 
 interface AccountStat {
@@ -749,6 +765,11 @@ function PnLChart({
   accountId,
   setAccountId,
   accountLabels,
+  prevMonth,
+  nextMonth,
+  goToday,
+  isCurrentMonth,
+  monthName,
 }: ReturnType<typeof useMonthlyHistory>) {
   const monthTotal = cumulative[cumulative.length - 1] ?? 0;
   const { W, H, padL, padR, yFor, xFor, ticks, xLabels } = chartScales(cumulative, days);
@@ -773,7 +794,7 @@ function PnLChart({
             ) : (
               <TrendingDown className="h-4 w-4 text-red-400" />
             )}
-            กำไรสะสม เดือนนี้
+            กำไรสะสม
           </div>
           <select
             value={accountId}
@@ -789,6 +810,16 @@ function PnLChart({
         <div className={`text-lg font-semibold ${monthTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
           {monthTotal >= 0 ? "+" : ""}{monthTotal.toFixed(2)} USD
         </div>
+      </div>
+      <div className="flex items-center gap-2 mb-2">
+        <button onClick={prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
+        <span className="text-sm font-medium min-w-32 text-center">{monthName}</span>
+        <button onClick={nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
+        {!isCurrentMonth && (
+          <button onClick={goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
+            <RotateCcw className="h-3.5 w-3.5" /> วันนี้
+          </button>
+        )}
       </div>
       {!hasData ? (
         <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
