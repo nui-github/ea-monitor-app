@@ -1356,7 +1356,7 @@ function useAccountPositions(accountId: number) {
   return positions;
 }
 
-function LightweightCandleChart({ candles, positions }: { candles: Candle[]; positions: Position[] }) {
+function LightweightCandleChart({ candles, positions, height }: { candles: Candle[]; positions: Position[]; height: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -1365,7 +1365,7 @@ function LightweightCandleChart({ candles, positions }: { candles: Candle[]; pos
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
-      height: 320,
+      height,
       layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
       grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
       timeScale: { timeVisible: true, secondsVisible: false, borderColor: "#3f3f46" },
@@ -1397,6 +1397,10 @@ function LightweightCandleChart({ candles, positions }: { candles: Candle[]; pos
   }, []);
 
   useEffect(() => {
+    chartRef.current?.applyOptions({ height });
+  }, [height]);
+
+  useEffect(() => {
     if (!seriesRef.current) return;
     seriesRef.current.setData(
       candles.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }))
@@ -1411,7 +1415,7 @@ function LightweightCandleChart({ candles, positions }: { candles: Candle[]; pos
     positions.forEach((p) => {
       const color = p.type === "BUY" ? "#34d399" : "#f87171";
       priceLinesRef.current.push(
-        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${p.type} #${p.ticket}` })
+        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.LargeDashed, title: `${p.type} #${p.ticket}` })
       );
       if (p.sl > 0) {
         priceLinesRef.current.push(
@@ -1429,11 +1433,27 @@ function LightweightCandleChart({ candles, positions }: { candles: Candle[]; pos
   return <div ref={containerRef} className="w-full" />;
 }
 
+const CHART_MIN_HEIGHT = 200;
+const CHART_MAX_HEIGHT = 700;
+
 function LiveChartCard() {
   const [accountId, setAccountId] = useState<number>(ACCOUNT_IDS[0]);
   const [symbol, setSymbol] = useState("");
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("M15");
   const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [chartHeight, setChartHeight] = useState(320);
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startY: e.clientY, startHeight: chartHeight };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const delta = e.clientY - dragRef.current.startY;
+    setChartHeight(Math.min(CHART_MAX_HEIGHT, Math.max(CHART_MIN_HEIGHT, dragRef.current.startHeight + delta)));
+  };
+  const onResizeEnd = () => { dragRef.current = null; };
 
   useEffect(() => {
     Promise.all(
@@ -1497,16 +1517,25 @@ function LiveChartCard() {
       </div>
 
       {symbols.length === 0 ? (
-        <div className="h-[320px] flex items-center justify-center text-zinc-500 text-sm">ไม่มี position เปิดอยู่</div>
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มี position เปิดอยู่</div>
       ) : loading || candles.length === 0 ? (
-        <div className="h-[320px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
       ) : (
         <>
-          <LightweightCandleChart candles={candles} positions={symbolPositions} />
-          <div className="flex items-center gap-4 mt-1 text-xs text-zinc-500">
-            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-zinc-400" /> Entry</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dotted border-red-400" /> SL</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dotted border-emerald-400" /> TP</span>
+          <LightweightCandleChart candles={candles} positions={symbolPositions} height={chartHeight} />
+          <div
+            onPointerDown={onResizeStart}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeEnd}
+            className="flex items-center justify-center h-3 -mt-0.5 cursor-ns-resize touch-none group"
+          >
+            <div className="w-10 h-1 rounded-full bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
+          </div>
+          <div className="flex items-center gap-x-6 gap-y-1 mt-1 text-xs text-zinc-500 flex-wrap">
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-emerald-400" /> Entry (BUY)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-red-400" /> Entry (SELL)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-red-400" /> SL</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-emerald-400" /> TP</span>
           </div>
         </>
       )}
