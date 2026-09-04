@@ -210,6 +210,20 @@ def get_orders(account_id: int):
     return result
 
 
+@app.get("/api/tick/{account_id}")
+def get_tick(account_id: int, symbol: str = Query(...)):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return {"time": int(datetime.now(timezone.utc).timestamp()), "bid": 2350.0, "ask": 2350.2}
+
+    mt5.symbol_select(symbol, True)
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        raise HTTPException(status_code=503, detail=f"No tick data for {symbol}")
+    return {"time": int(tick.time), "bid": tick.bid, "ask": tick.ask}
+
+
 @app.get("/api/candles/{account_id}")
 def get_candles(account_id: int, symbol: str = Query(...), timeframe: str = Query("M15"), count: int = Query(150)):
     ensure_connection(account_id)

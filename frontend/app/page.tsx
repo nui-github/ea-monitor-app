@@ -1332,6 +1332,37 @@ interface Candle {
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] as const;
 
+const TIMEFRAME_SECONDS: Record<(typeof TIMEFRAMES)[number], number> = {
+  M1: 60, M5: 300, M15: 900, M30: 1800,
+  H1: 3600, H4: 14400, D1: 86400, W1: 604800, MN1: 2592000,
+};
+
+interface Tick {
+  time: number;
+  bid: number;
+  ask: number;
+}
+
+function useTick(accountId: number, symbol: string) {
+  const [tick, setTick] = useState<Tick | null>(null);
+
+  useEffect(() => {
+    if (!symbol) { setTick(null); return; }
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/tick/${accountId}?symbol=${encodeURIComponent(symbol)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: Tick | null) => { if (alive) setTick(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId, symbol]);
+
+  return tick;
+}
+
 function useCandles(accountId: number, symbol: string, timeframe: string) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1391,17 +1422,35 @@ function LightweightCandleChart({
   candles,
   positions,
   orders,
+  tick,
+  timeframe,
   height,
 }: {
   candles: Candle[];
   positions: Position[];
   orders: PendingOrder[];
+  tick: Tick | null;
+  timeframe: (typeof TIMEFRAMES)[number];
   height: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const lastCandleRef = useRef<Candle | null>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const hoveringRef = useRef(false);
+
+  const renderLegend = (c: { open: number; high: number; low: number; close: number } | null) => {
+    if (!legendRef.current) return;
+    if (!c) { legendRef.current.innerHTML = ""; return; }
+    const color = c.close >= c.open ? "#34d399" : "#f87171";
+    legendRef.current.innerHTML = [
+      ["O", c.open], ["H", c.high], ["L", c.low], ["C", c.close],
+    ].map(([label, value]) =>
+      `<span style="color:#71717a">${label}</span> <span style="color:${color}">${(value as number).toFixed(2)}</span>`
+    ).join(" &nbsp; ");
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1421,6 +1470,18 @@ function LightweightCandleChart({
     });
     chartRef.current = chart;
     seriesRef.current = series;
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!seriesRef.current) return;
+      if (!param.point || !param.time) {
+        hoveringRef.current = false;
+        renderLegend(lastCandleRef.current);
+        return;
+      }
+      hoveringRef.current = true;
+      const data = param.seriesData.get(seriesRef.current) as { open: number; high: number; low: number; close: number } | undefined;
+      renderLegend(data ?? lastCandleRef.current);
+    });
 
     const resize = () => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
@@ -1446,8 +1507,31 @@ function LightweightCandleChart({
     seriesRef.current.setData(
       candles.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }))
     );
+    lastCandleRef.current = candles.length > 0 ? candles[candles.length - 1] : null;
+    hoveringRef.current = false;
+    renderLegend(lastCandleRef.current);
     chartRef.current?.timeScale().fitContent();
   }, [candles]);
+
+  useEffect(() => {
+    if (!seriesRef.current || !tick) return;
+    const stepSeconds = TIMEFRAME_SECONDS[timeframe];
+    const bucketTime = Math.floor(tick.time / stepSeconds) * stepSeconds;
+    const price = tick.bid;
+    const prev = lastCandleRef.current;
+
+    let next: Candle;
+    if (prev && bucketTime === prev.time) {
+      next = { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price };
+    } else if (!prev || bucketTime > prev.time) {
+      next = { time: bucketTime, open: price, high: price, low: price, close: price };
+    } else {
+      return;
+    }
+    lastCandleRef.current = next;
+    seriesRef.current.update({ time: next.time as UTCTimestamp, open: next.open, high: next.high, low: next.low, close: next.close });
+    if (!hoveringRef.current) renderLegend(next);
+  }, [tick, timeframe]);
 
   useEffect(() => {
     if (!seriesRef.current) return;
@@ -1486,7 +1570,12 @@ function LightweightCandleChart({
     });
   }, [positions, orders]);
 
-  return <div ref={containerRef} className="w-full" />;
+  return (
+    <div className="relative w-full">
+      <div ref={legendRef} className="absolute top-2 left-2 z-50 text-[11px] font-mono pointer-events-none bg-zinc-800/90 border border-zinc-600 rounded px-2 py-1" />
+      <div ref={containerRef} className="w-full" />
+    </div>
+  );
 }
 
 const CHART_MIN_HEIGHT = 200;
@@ -1546,6 +1635,7 @@ function LiveChartCard() {
   }, [symbols.join(","), symbol]);
 
   const { candles, loading } = useCandles(accountId, symbol, timeframe);
+  const tick = useTick(accountId, symbol);
   const symbolPositions = positions.filter((p) => p.symbol === symbol);
   const symbolOrders = orders.filter((o) => o.symbol === symbol);
 
@@ -1594,7 +1684,7 @@ function LiveChartCard() {
         <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
       ) : (
         <>
-          <LightweightCandleChart candles={candles} positions={symbolPositions} orders={symbolOrders} height={chartHeight} />
+          <LightweightCandleChart candles={candles} positions={symbolPositions} orders={symbolOrders} tick={tick} timeframe={timeframe} height={chartHeight} />
           <div
             onPointerDown={onResizeStart}
             onPointerMove={onResizeMove}
