@@ -1347,6 +1347,8 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
     }
   };
 
+  const floatingPnl = positions.reduce((s, p) => s + p.profit, 0);
+
   return (
     <section className="space-y-4">
       <div className="flex items-start justify-between">
@@ -1427,13 +1429,21 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
         </div>
       </div>
 
-      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-3">
-        <button onClick={() => setConfirmAction("profitable")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          <PiggyBank className="h-4 w-4 shrink-0" /> Close Profitable
-        </button>
-        <button onClick={() => setConfirmAction("all")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
-          <OctagonX className="h-4 w-4 shrink-0" /> Close All Positions
-        </button>
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-sm text-zinc-400">
+          Floating PnL
+          <span className={`font-semibold ${floatingPnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {floatingPnl >= 0 ? "+" : ""}{floatingPnl.toFixed(2)} USD
+          </span>
+        </div>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+          <button onClick={() => setConfirmAction("profitable")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+            <PiggyBank className="h-4 w-4 shrink-0" /> Close Profitable
+          </button>
+          <button onClick={() => setConfirmAction("all")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+            <OctagonX className="h-4 w-4 shrink-0" /> Close All Positions
+          </button>
+        </div>
       </div>
 
       {confirmAction && (
