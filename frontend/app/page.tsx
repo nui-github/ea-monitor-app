@@ -130,6 +130,10 @@ function usePullToRefresh() {
     if (refreshing) return;
 
     const onTouchStart = (e: TouchEvent) => {
+      if ((e.target as HTMLElement).closest("[data-no-pull-refresh]")) {
+        pullingRef.current = false;
+        return;
+      }
       if (window.scrollY <= 0) {
         startYRef.current = e.touches[0].clientY;
         pullingRef.current = true;
@@ -1571,7 +1575,7 @@ function LightweightCandleChart({
   }, [positions, orders]);
 
   return (
-    <div className="relative w-full">
+    <div className="relative w-full" data-no-pull-refresh>
       <div ref={legendRef} className="absolute top-2 left-2 z-50 text-[11px] font-mono pointer-events-none bg-zinc-800/90 border border-zinc-600 rounded px-2 py-1" />
       <div ref={containerRef} className="w-full" />
     </div>
@@ -1690,6 +1694,7 @@ function LiveChartCard() {
             onPointerMove={onResizeMove}
             onPointerUp={onResizeEnd}
             className="flex items-center justify-center h-3 -mt-0.5 cursor-ns-resize touch-none group"
+            data-no-pull-refresh
           >
             <div className="w-10 h-1 rounded-full bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
           </div>
