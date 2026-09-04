@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createChart, IChartApi, ISeriesApi, IPriceLine, LineStyle, UTCTimestamp } from "lightweight-charts";
 import {
   Activity,
   RotateCw,
@@ -34,6 +35,7 @@ import {
   History,
   X,
   PiggyBank,
+  CandlestickChart,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -227,6 +229,7 @@ export default function Home() {
         {tab === "overview" && <OverviewTab />}
         {tab === "positions" && (
           <div className="space-y-8">
+            <LiveChartCard />
             {ACCOUNT_IDS.map((id) => (
               <AccountPanel key={id} accountId={id} label={`Account ${id}`} />
             ))}
@@ -1306,6 +1309,210 @@ function DayTradesPanel({
 }
 
 // ─── Positions Tab ────────────────────────────────────────────────────────────
+
+interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] as const;
+
+function useCandles(accountId: number, symbol: string, timeframe: string) {
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!symbol) return;
+    setLoading(true);
+    apiFetch(`/api/candles/${accountId}?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&count=150`)
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [] as Candle[])
+      .then((data: Candle[]) => setCandles(data))
+      .finally(() => setLoading(false));
+  }, [accountId, symbol, timeframe]);
+
+  return { candles, loading };
+}
+
+function useAccountPositions(accountId: number) {
+  const [positions, setPositions] = useState<Position[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/positions/${accountId}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d: Position[]) => { if (alive) setPositions(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId]);
+
+  return positions;
+}
+
+function LightweightCandleChart({ candles, positions }: { candles: Candle[]; positions: Position[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      height: 320,
+      layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
+      grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: "#3f3f46" },
+      rightPriceScale: { borderColor: "#3f3f46" },
+    });
+    const series = chart.addCandlestickSeries({
+      upColor: "#34d399",
+      downColor: "#f87171",
+      borderVisible: false,
+      wickUpColor: "#34d399",
+      wickDownColor: "#f87171",
+    });
+    chartRef.current = chart;
+    seriesRef.current = series;
+
+    const resize = () => {
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(containerRef.current);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.setData(
+      candles.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }))
+    );
+    chartRef.current?.timeScale().fitContent();
+  }, [candles]);
+
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    priceLinesRef.current.forEach((l) => seriesRef.current!.removePriceLine(l));
+    priceLinesRef.current = [];
+    positions.forEach((p) => {
+      const color = p.type === "BUY" ? "#34d399" : "#f87171";
+      priceLinesRef.current.push(
+        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${p.type} #${p.ticket}` })
+      );
+      if (p.sl > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: p.sl, color: "#f87171", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "SL" })
+        );
+      }
+      if (p.tp > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: p.tp, color: "#34d399", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "TP" })
+        );
+      }
+    });
+  }, [positions]);
+
+  return <div ref={containerRef} className="w-full" />;
+}
+
+function LiveChartCard() {
+  const [accountId, setAccountId] = useState<number>(ACCOUNT_IDS[0]);
+  const [symbol, setSymbol] = useState("");
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("M15");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  const positions = useAccountPositions(accountId);
+  const symbols = Array.from(new Set(positions.map((p) => p.symbol)));
+
+  useEffect(() => {
+    if (symbols.length > 0 && !symbols.includes(symbol)) setSymbol(symbols[0]);
+    if (symbols.length === 0 && symbol) setSymbol("");
+  }, [symbols.join(","), symbol]);
+
+  const { candles, loading } = useCandles(accountId, symbol, timeframe);
+  const symbolPositions = positions.filter((p) => p.symbol === symbol);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <CandlestickChart className="h-4 w-4" /> กราฟราคา
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {ACCOUNT_IDS.map((id) => (
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
+            ))}
+          </select>
+          {symbols.length > 0 && (
+            <select
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+            >
+              {symbols.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {TIMEFRAMES.map((tf) => (
+              <option key={tf} value={tf}>{tf}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {symbols.length === 0 ? (
+        <div className="h-[320px] flex items-center justify-center text-zinc-500 text-sm">ไม่มี position เปิดอยู่</div>
+      ) : loading || candles.length === 0 ? (
+        <div className="h-[320px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : (
+        <>
+          <LightweightCandleChart candles={candles} positions={symbolPositions} />
+          <div className="flex items-center gap-4 mt-1 text-xs text-zinc-500">
+            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-zinc-400" /> Entry</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dotted border-red-400" /> SL</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-3 border-t border-dotted border-emerald-400" /> TP</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function AccountPanel({ accountId, label }: { accountId: number; label: string }) {
   const [account, setAccount] = useState<Account | null>(null);

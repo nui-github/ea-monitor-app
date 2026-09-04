@@ -15,6 +15,22 @@ ACCOUNT_PATHS = {
     2: r"C:\Program Files\MetaTrader 5 - Port2\terminal64.exe",
 }
 
+TIMEFRAME_NAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+if MOCK_MODE:
+    TIMEFRAME_MAP = {name: name for name in TIMEFRAME_NAMES}
+else:
+    TIMEFRAME_MAP = {
+        "M1": mt5.TIMEFRAME_M1,
+        "M5": mt5.TIMEFRAME_M5,
+        "M15": mt5.TIMEFRAME_M15,
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+        "D1": mt5.TIMEFRAME_D1,
+        "W1": mt5.TIMEFRAME_W1,
+        "MN1": mt5.TIMEFRAME_MN1,
+    }
+
 app = FastAPI(title="MT5 EA Monitor API")
 
 app.add_middleware(
@@ -159,6 +175,52 @@ def get_positions(account_id: int):
             "profit": pos.profit,
         })
     return result
+
+
+@app.get("/api/candles/{account_id}")
+def get_candles(account_id: int, symbol: str = Query(...), timeframe: str = Query("M15"), count: int = Query(150)):
+    ensure_connection(account_id)
+
+    tf = TIMEFRAME_MAP.get(timeframe.upper())
+    if tf is None:
+        raise HTTPException(status_code=400, detail=f"Unknown timeframe {timeframe}")
+    count = max(10, min(count, 500))
+
+    if MOCK_MODE:
+        import random
+        now = datetime.now(timezone.utc)
+        step_seconds = {
+            "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+            "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800, "MN1": 2592000,
+        }[timeframe.upper()]
+        price = 2350.0
+        candles = []
+        for i in range(count):
+            o = price
+            c = o + random.uniform(-3, 3)
+            h = max(o, c) + random.uniform(0, 2)
+            l = min(o, c) - random.uniform(0, 2)
+            candles.append({
+                "time": int(now.timestamp()) - (count - i) * step_seconds,
+                "open": round(o, 2), "high": round(h, 2), "low": round(l, 2), "close": round(c, 2),
+            })
+            price = c
+        return candles
+
+    mt5.symbol_select(symbol, True)
+    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+    if rates is None or len(rates) == 0:
+        raise HTTPException(status_code=503, detail=f"No candle data for {symbol}")
+    return [
+        {
+            "time": int(r["time"]),
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+        }
+        for r in rates
+    ]
 
 
 def _close_positions(positions):
