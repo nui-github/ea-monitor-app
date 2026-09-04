@@ -36,6 +36,7 @@ import {
   X,
   PiggyBank,
   CandlestickChart,
+  Clock,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -68,6 +69,16 @@ interface Position {
   sl: number;
   tp: number;
   profit: number;
+}
+
+interface PendingOrder {
+  ticket: number;
+  symbol: string;
+  type: string;
+  volume: number;
+  price_open: number;
+  sl: number;
+  tp: number;
 }
 
 interface OverviewAccount {
@@ -1356,7 +1367,36 @@ function useAccountPositions(accountId: number) {
   return positions;
 }
 
-function LightweightCandleChart({ candles, positions, height }: { candles: Candle[]; positions: Position[]; height: number }) {
+function useAccountOrders(accountId: number) {
+  const [orders, setOrders] = useState<PendingOrder[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/orders/${accountId}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d: PendingOrder[]) => { if (alive) setOrders(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId]);
+
+  return orders;
+}
+
+function LightweightCandleChart({
+  candles,
+  positions,
+  orders,
+  height,
+}: {
+  candles: Candle[];
+  positions: Position[];
+  orders: PendingOrder[];
+  height: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -1428,7 +1468,22 @@ function LightweightCandleChart({ candles, positions, height }: { candles: Candl
         );
       }
     });
-  }, [positions]);
+    orders.forEach((o) => {
+      priceLinesRef.current.push(
+        seriesRef.current!.createPriceLine({ price: o.price_open, color: "#fbbf24", lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${o.type} #${o.ticket}` })
+      );
+      if (o.sl > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: o.sl, color: "#f87171", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "SL" })
+        );
+      }
+      if (o.tp > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: o.tp, color: "#34d399", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "TP" })
+        );
+      }
+    });
+  }, [positions, orders]);
 
   return <div ref={containerRef} className="w-full" />;
 }
@@ -1481,7 +1536,8 @@ function LiveChartCard() {
   }, []);
 
   const positions = useAccountPositions(accountId);
-  const symbols = Array.from(new Set(positions.map((p) => p.symbol)));
+  const orders = useAccountOrders(accountId);
+  const symbols = Array.from(new Set([...positions.map((p) => p.symbol), ...orders.map((o) => o.symbol)]));
 
   useEffect(() => {
     if (symbols.length > 0 && !symbols.includes(symbol)) setSymbol(symbols[0]);
@@ -1490,6 +1546,7 @@ function LiveChartCard() {
 
   const { candles, loading } = useCandles(accountId, symbol, timeframe);
   const symbolPositions = positions.filter((p) => p.symbol === symbol);
+  const symbolOrders = orders.filter((o) => o.symbol === symbol);
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
@@ -1531,12 +1588,12 @@ function LiveChartCard() {
       </div>
 
       {symbols.length === 0 ? (
-        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มี position เปิดอยู่</div>
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มี position หรือ order เปิดอยู่</div>
       ) : loading || candles.length === 0 ? (
         <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
       ) : (
         <>
-          <LightweightCandleChart candles={candles} positions={symbolPositions} height={chartHeight} />
+          <LightweightCandleChart candles={candles} positions={symbolPositions} orders={symbolOrders} height={chartHeight} />
           <div
             onPointerDown={onResizeStart}
             onPointerMove={onResizeMove}
@@ -1548,6 +1605,7 @@ function LiveChartCard() {
           <div className="flex items-center gap-x-6 gap-y-1 mt-1 text-xs text-zinc-500 flex-wrap">
             <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-emerald-400" /> Entry (BUY)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-red-400" /> Entry (SELL)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t border-dashed border-amber-400" /> Pending Order</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-red-400" /> SL</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-emerald-400" /> TP</span>
           </div>
@@ -1560,6 +1618,7 @@ function LiveChartCard() {
 function AccountPanel({ accountId, label }: { accountId: number; label: string }) {
   const [account, setAccount] = useState<Account | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [orders, setOrders] = useState<PendingOrder[]>([]);
   const [online, setOnline] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"all" | "profitable" | null>(null);
   const [closing, setClosing] = useState(false);
@@ -1567,13 +1626,15 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [accRes, posRes] = await Promise.all([
+        const [accRes, posRes, ordRes] = await Promise.all([
           apiFetch(`/api/account/${accountId}`),
           apiFetch(`/api/positions/${accountId}`),
+          apiFetch(`/api/orders/${accountId}`),
         ]);
         if (!accRes.ok || !posRes.ok) throw new Error("bad response");
         setAccount(await accRes.json());
         setPositions(await posRes.json());
+        setOrders(ordRes.ok ? await ordRes.json() : []);
         setOnline(true);
       } catch {
         setOnline(false);
@@ -1671,6 +1732,46 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
                     <td className={`px-4 py-2 font-medium ${p.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                       {p.profit.toFixed(2)}
                     </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+        <h3 className="px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center gap-2">
+          <Clock className="h-4 w-4" /> Pending Orders
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-zinc-400 text-left">
+                <th className="px-4 py-2">Ticket</th>
+                <th className="px-4 py-2">Symbol</th>
+                <th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2">Volume</th>
+                <th className="px-4 py-2">Price</th>
+                <th className="px-4 py-2">SL</th>
+                <th className="px-4 py-2">TP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-6 text-center text-zinc-500">No pending orders</td></tr>
+              ) : (
+                orders.map((o) => (
+                  <tr key={o.ticket} className="border-t border-zinc-800">
+                    <td className="px-4 py-2">{o.ticket}</td>
+                    <td className="px-4 py-2 font-medium text-zinc-200">{o.symbol}</td>
+                    <td className={`px-4 py-2 font-medium ${o.type.startsWith("BUY") ? "text-emerald-400" : "text-red-400"}`}>
+                      {o.type}
+                    </td>
+                    <td className="px-4 py-2">{o.volume}</td>
+                    <td className="px-4 py-2">{o.price_open}</td>
+                    <td className="px-4 py-2">{o.sl}</td>
+                    <td className="px-4 py-2">{o.tp}</td>
                   </tr>
                 ))
               )}

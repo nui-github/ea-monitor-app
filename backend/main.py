@@ -177,6 +177,39 @@ def get_positions(account_id: int):
     return result
 
 
+@app.get("/api/orders/{account_id}")
+def get_orders(account_id: int):
+    ensure_connection(account_id)
+
+    if MOCK_MODE:
+        return []
+
+    orders = mt5.orders_get()
+    if orders is None:
+        return []
+
+    order_types = {
+        mt5.ORDER_TYPE_BUY_LIMIT: "BUY LIMIT",
+        mt5.ORDER_TYPE_SELL_LIMIT: "SELL LIMIT",
+        mt5.ORDER_TYPE_BUY_STOP: "BUY STOP",
+        mt5.ORDER_TYPE_SELL_STOP: "SELL STOP",
+        mt5.ORDER_TYPE_BUY_STOP_LIMIT: "BUY STOP LIMIT",
+        mt5.ORDER_TYPE_SELL_STOP_LIMIT: "SELL STOP LIMIT",
+    }
+    result = []
+    for o in orders:
+        result.append({
+            "ticket": o.ticket,
+            "symbol": o.symbol,
+            "type": order_types.get(o.type, str(o.type)),
+            "volume": o.volume_current,
+            "price_open": o.price_open,
+            "sl": o.sl,
+            "tp": o.tp,
+        })
+    return result
+
+
 @app.get("/api/candles/{account_id}")
 def get_candles(account_id: int, symbol: str = Query(...), timeframe: str = Query("M15"), count: int = Query(150)):
     ensure_connection(account_id)
