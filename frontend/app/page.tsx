@@ -37,6 +37,7 @@ import {
   PiggyBank,
   CandlestickChart,
   Clock,
+  ChevronDown,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -1622,6 +1623,7 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
   const [online, setOnline] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"all" | "profitable" | null>(null);
   const [closing, setClosing] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -1741,43 +1743,52 @@ function AccountPanel({ accountId, label }: { accountId: number; label: string }
       </div>
 
       <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
-        <h3 className="px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center gap-2">
-          <Clock className="h-4 w-4" /> Pending Orders
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-zinc-400 text-left">
-                <th className="px-4 py-2">Ticket</th>
-                <th className="px-4 py-2">Symbol</th>
-                <th className="px-4 py-2">Type</th>
-                <th className="px-4 py-2">Volume</th>
-                <th className="px-4 py-2">Price</th>
-                <th className="px-4 py-2">SL</th>
-                <th className="px-4 py-2">TP</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-6 text-center text-zinc-500">No pending orders</td></tr>
-              ) : (
-                orders.map((o) => (
-                  <tr key={o.ticket} className="border-t border-zinc-800">
-                    <td className="px-4 py-2">{o.ticket}</td>
-                    <td className="px-4 py-2 font-medium text-zinc-200">{o.symbol}</td>
-                    <td className={`px-4 py-2 font-medium ${o.type.startsWith("BUY") ? "text-emerald-400" : "text-red-400"}`}>
-                      {o.type}
-                    </td>
-                    <td className="px-4 py-2">{o.volume}</td>
-                    <td className="px-4 py-2">{o.price_open}</td>
-                    <td className="px-4 py-2">{o.sl}</td>
-                    <td className="px-4 py-2">{o.tp}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <button
+          onClick={() => setOrdersOpen((v) => !v)}
+          className="w-full px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center justify-between gap-2"
+        >
+          <span className="flex items-center gap-2">
+            <Clock className="h-4 w-4" /> Pending Orders
+            {orders.length > 0 && <span className="text-xs text-zinc-500">({orders.length})</span>}
+          </span>
+          <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${ordersOpen ? "rotate-180" : ""}`} />
+        </button>
+        {ordersOpen && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-zinc-400 text-left">
+                  <th className="px-4 py-2">Ticket</th>
+                  <th className="px-4 py-2">Symbol</th>
+                  <th className="px-4 py-2">Type</th>
+                  <th className="px-4 py-2">Volume</th>
+                  <th className="px-4 py-2">Price</th>
+                  <th className="px-4 py-2">SL</th>
+                  <th className="px-4 py-2">TP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-zinc-500">No pending orders</td></tr>
+                ) : (
+                  orders.map((o) => (
+                    <tr key={o.ticket} className="border-t border-zinc-800">
+                      <td className="px-4 py-2">{o.ticket}</td>
+                      <td className="px-4 py-2 font-medium text-zinc-200">{o.symbol}</td>
+                      <td className={`px-4 py-2 font-medium ${o.type.startsWith("BUY") ? "text-emerald-400" : "text-red-400"}`}>
+                        {o.type}
+                      </td>
+                      <td className="px-4 py-2">{o.volume}</td>
+                      <td className="px-4 py-2">{o.price_open}</td>
+                      <td className="px-4 py-2">{o.sl}</td>
+                      <td className="px-4 py-2">{o.tp}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
