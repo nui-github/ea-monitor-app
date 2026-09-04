@@ -1458,6 +1458,20 @@ function LiveChartCard() {
   useEffect(() => {
     Promise.all(
       ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/positions/${id}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .then((d: Position[]) => [id, d.length] as [number, number])
+          .catch(() => [id, 0] as [number, number])
+      )
+    ).then((results) => {
+      const withOrders = results.find(([, count]) => count > 0)?.[0];
+      if (withOrders !== undefined) setAccountId(withOrders);
+    });
+  }, []);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
         apiFetch(`/api/account/${id}`)
           .then((r) => r.json())
           .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
