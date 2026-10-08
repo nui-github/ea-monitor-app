@@ -431,7 +431,7 @@ function useRangeHistory() {
 
   const now = new Date();
   const todayStr = toDateStr(now);
-  const [preset, setPreset] = useState<RangePreset>("month");
+  const [preset, setPreset] = useState<RangePreset>("today");
   const [customStart, setCustomStart] = useState(() => toDateStr(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [customEnd, setCustomEnd] = useState(todayStr);
 
