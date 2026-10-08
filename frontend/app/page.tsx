@@ -365,14 +365,96 @@ function OverviewTab() {
   );
 }
 
-function useMonthlyHistory() {
+type RangePreset = "today" | "week" | "month" | "3m" | "6m" | "year" | "custom";
+
+const RANGE_PRESETS: { key: RangePreset; label: string }[] = [
+  { key: "today", label: "วันนี้" },
+  { key: "week", label: "อาทิตย์นี้" },
+  { key: "month", label: "เดือนนี้" },
+  { key: "3m", label: "3 เดือนล่าสุด" },
+  { key: "6m", label: "6 เดือนล่าสุด" },
+  { key: "year", label: "ปีล่าสุด" },
+  { key: "custom", label: "กำหนดเอง" },
+];
+
+const MAX_RANGE_DAYS = 1500;
+
+function toDateStr(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function parseDateStr(s: string) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function addDays(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+}
+
+function addMonths(d: Date, n: number) {
+  const first = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return new Date(first.getFullYear(), first.getMonth(), Math.min(d.getDate(), daysInMonth));
+}
+
+function formatDateTh(s: string) {
+  return parseDateStr(s).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function presetRange(preset: Exclude<RangePreset, "custom">, today: Date): { start: Date; end: Date } {
+  switch (preset) {
+    case "today":
+      return { start: today, end: today };
+    case "week": {
+      const monday = addDays(today, -((today.getDay() + 6) % 7));
+      return { start: monday, end: addDays(monday, 6) };
+    }
+    case "month":
+      return {
+        start: new Date(today.getFullYear(), today.getMonth(), 1),
+        end: new Date(today.getFullYear(), today.getMonth() + 1, 0),
+      };
+    case "3m":
+      return { start: addDays(addMonths(today, -3), 1), end: today };
+    case "6m":
+      return { start: addDays(addMonths(today, -6), 1), end: today };
+    case "year":
+      return { start: addDays(addMonths(today, -12), 1), end: today };
+  }
+}
+
+function useRangeHistory() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const today = isCurrentMonth ? now.getDate() : daysInMonth;
+  const todayStr = toDateStr(now);
+  const [preset, setPreset] = useState<RangePreset>("month");
+  const [customStart, setCustomStart] = useState(() => toDateStr(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [customEnd, setCustomEnd] = useState(todayStr);
+
+  let selectedStart: string;
+  let selectedEnd: string;
+  if (preset === "custom") {
+    selectedStart = customStart;
+    selectedEnd = customEnd;
+  } else {
+    const r = presetRange(preset, now);
+    selectedStart = toDateStr(r.start);
+    selectedEnd = toDateStr(r.end);
+  }
+  // Data only exists up to today, so clamp what we fetch and plot.
+  const end = selectedEnd > todayStr ? todayStr : selectedEnd;
+  const start = selectedStart > end ? end : selectedStart;
+  const rangeLabel =
+    selectedStart === selectedEnd
+      ? formatDateTh(selectedStart)
+      : `${formatDateTh(selectedStart)} – ${formatDateTh(selectedEnd)}`;
+
   const [history, setHistory] = useState<DayHistory[]>([]);
+  const [loading, setLoading] = useState(true);
   const [accountId, setAccountId] = useState<number | "all">("all");
   const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
 
@@ -387,51 +469,75 @@ function useMonthlyHistory() {
     ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
   }, []);
 
+  const hourly = preset === "today";
+
   useEffect(() => {
+    if (!mounted) return;
+    let alive = true;
+    setLoading(true);
     const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
     Promise.all(
       ids.map((id) =>
-        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
-          .then((r) => r.json())
+        apiFetch(`/api/history/${id}?start=${start}&end=${end}${hourly ? "&granularity=hour" : ""}`)
+          .then((r) => (r.ok ? r.json() : []))
           .catch(() => [] as DayHistory[])
       )
     ).then((results) => {
+      if (!alive) return;
       const merged: Record<string, DayHistory> = {};
       results.flat().forEach((h: DayHistory) => {
         if (merged[h.date]) merged[h.date].profit += h.profit;
         else merged[h.date] = { ...h };
       });
       setHistory(Object.values(merged));
+      setLoading(false);
     });
-  }, [year, month, accountId]);
+    return () => { alive = false; };
+  }, [mounted, start, end, accountId, hourly]);
 
   const byDay: Record<string, number> = {};
   history.forEach((h) => (byDay[h.date] = h.profit));
 
-  const days = Array.from({ length: today }, (_, i) => i + 1);
-  const daily = days.map((d) => {
-    const key = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    return byDay[key] ?? 0;
-  });
+  const dates: string[] = [];
+  let days: string[];
+  let axisLabels: string[];
+  let fullDates: string[];
+  let daily: number[];
+
+  if (hourly) {
+    // "Today" plots per hour on a fixed 0-23 axis; points run to the last hour with deals.
+    const hourOf = (iso: string) => Number(iso.slice(11, 13));
+    const byHour: Record<number, number> = {};
+    history.forEach((h) => (byHour[hourOf(h.date)] = (byHour[hourOf(h.date)] ?? 0) + h.profit));
+    const lastHour = history.length > 0 ? Math.max(...history.map((h) => hourOf(h.date))) : -1;
+    const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
+    axisLabels = Array.from({ length: 24 }, (_, h) => hourLabel(h));
+    days = axisLabels.slice(0, lastHour + 1);
+    fullDates = days.map((l) => `${formatDateTh(start)} ${l}`);
+    daily = days.map((_, h) => byHour[h] ?? 0);
+  } else {
+    if (mounted) {
+      for (let d = parseDateStr(start); toDateStr(d) <= end && dates.length < MAX_RANGE_DAYS; d = addDays(d, 1)) {
+        dates.push(toDateStr(d));
+      }
+    }
+    const sameMonth = start.slice(0, 7) === end.slice(0, 7);
+    days = dates.map((s) => (sameMonth ? String(Number(s.slice(8))) : `${Number(s.slice(8))}/${Number(s.slice(5, 7))}`));
+    axisLabels = days;
+    fullDates = dates.map(formatDateTh);
+    daily = dates.map((s) => byDay[s] ?? 0);
+  }
 
   let running = 0;
   const cumulative = daily.map((v) => (running += v));
   const hasData = history.length > 0;
 
-  const prevMonth = () => {
-    if (month === 1) { setYear((y) => y - 1); setMonth(12); }
-    else setMonth((m) => m - 1);
-  };
-  const nextMonth = () => {
-    if (month === 12) { setYear((y) => y + 1); setMonth(1); }
-    else setMonth((m) => m + 1);
-  };
-  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
-  const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
-
   return {
-    year, month, days, daily, cumulative, hasData, accountId, setAccountId, accountLabels,
-    prevMonth, nextMonth, goToday, isCurrentMonth, monthName,
+    start, end, mounted, preset, setPreset,
+    customStart, setCustomStart, customEnd, setCustomEnd, todayStr,
+    rangeLabel: mounted ? rangeLabel : "",
+    days, axisLabels, slots: axisLabels.length, fullDates, daily, cumulative, hasData, loading,
+    accountId, setAccountId, accountLabels,
   };
 }
 
@@ -441,13 +547,14 @@ interface AccountStat {
   trades: number;
 }
 
-function useAccountComparison(year: number, month: number) {
+function useAccountComparison(start: string, end: string) {
   const [data, setData] = useState<AccountStat[]>([]);
 
   useEffect(() => {
+    let alive = true;
     Promise.all(
       ACCOUNT_IDS.map((id) =>
-        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
+        apiFetch(`/api/history/${id}?start=${start}&end=${end}`)
           .then((r) => (r.ok ? r.json() : []))
           .catch(() => [] as DayHistory[])
           .then((hist: DayHistory[]) => ({
@@ -456,8 +563,9 @@ function useAccountComparison(year: number, month: number) {
             trades: hist.reduce((s, h) => s + h.trades, 0),
           }))
       )
-    ).then(setData);
-  }, [year, month]);
+    ).then((d) => { if (alive) setData(d); });
+    return () => { alive = false; };
+  }, [start, end]);
 
   return data;
 }
@@ -468,18 +576,20 @@ interface SymbolStat {
   trades: number;
 }
 
-function useSymbolStats(accountId: number | "all", year: number, month: number) {
+function useSymbolStats(accountId: number | "all", start: string, end: string) {
   const [stats, setStats] = useState<SymbolStat[]>([]);
 
   useEffect(() => {
+    let alive = true;
     const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
     Promise.all(
       ids.map((id) =>
-        apiFetch(`/api/symbol_stats/${id}?year=${year}&month=${month}`)
+        apiFetch(`/api/symbol_stats/${id}?start=${start}&end=${end}`)
           .then((r) => (r.ok ? r.json() : []))
           .catch(() => [] as SymbolStat[])
       )
     ).then((results) => {
+      if (!alive) return;
       const merged: Record<string, SymbolStat> = {};
       results.flat().forEach((s: SymbolStat) => {
         if (merged[s.symbol]) {
@@ -491,7 +601,8 @@ function useSymbolStats(accountId: number | "all", year: number, month: number) 
       });
       setStats(Object.values(merged).sort((a, b) => b.profit - a.profit));
     });
-  }, [accountId, year, month]);
+    return () => { alive = false; };
+  }, [accountId, start, end]);
 
   return stats;
 }
@@ -666,7 +777,12 @@ function DepositWithdrawalPanel() {
   );
 }
 
-function chartScales(cumulative: number[], days: number[]) {
+function labelIndices(n: number) {
+  const step = Math.max(1, Math.ceil(n / 6));
+  return Array.from({ length: n }, (_, i) => i).filter((i) => i % step === 0 || i === n - 1);
+}
+
+function chartScales(cumulative: number[], slots: number) {
   const W = 700, H = 170;
   const padL = 44, padR = 12, padT = 14, padB = 22;
   const plotW = W - padL - padR;
@@ -676,21 +792,21 @@ function chartScales(cumulative: number[], days: number[]) {
   const cumMax = Math.max(0, ...cumulative);
   const range = cumMax - cumMin || 1;
   const yFor = (v: number) => padT + plotH - ((v - cumMin) / range) * plotH;
-  const xFor = (i: number) => padL + (days.length === 1 ? plotW / 2 : (plotW * i) / (days.length - 1));
+  const xFor = (i: number) => padL + (slots === 1 ? plotW / 2 : (plotW * i) / (slots - 1));
 
   const ticks = [cumMax, (cumMax + cumMin) / 2, cumMin].filter((v, i, arr) => arr.indexOf(v) === i);
-  const dayStep = Math.ceil(days.length / 6);
-  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
+  const xLabelIdx = labelIndices(slots);
 
-  return { W, H, padL, padR, yFor, xFor, ticks, xLabels };
+  return { W, H, padL, padR, yFor, xFor, ticks, xLabelIdx };
 }
 
 function PerformanceCharts() {
-  const m = useMonthlyHistory();
-  const symbolStats = useSymbolStats(m.accountId, m.year, m.month);
-  const accountStats = useAccountComparison(m.year, m.month);
+  const m = useRangeHistory();
+  const symbolStats = useSymbolStats(m.accountId, m.start, m.end);
+  const accountStats = useAccountComparison(m.start, m.end);
   return (
     <div className="space-y-3">
+      <RangeFilter {...m} />
       <PnLChart {...m} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <AccountComparisonChart stats={accountStats} accountLabels={m.accountLabels} />
@@ -776,30 +892,113 @@ function SymbolBreakdown({ stats }: { stats: SymbolStat[] }) {
   );
 }
 
+function RangeFilter({
+  preset,
+  setPreset,
+  customStart,
+  setCustomStart,
+  customEnd,
+  setCustomEnd,
+  todayStr,
+  rangeLabel,
+}: ReturnType<typeof useRangeHistory>) {
+  const dateInputClass =
+    "w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-100 [color-scheme:dark]";
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-2.5">
+      <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <CalendarDays className="h-4 w-4" />
+          ช่วงเวลา
+        </div>
+        <div className="text-xs text-zinc-400 min-h-4">{rangeLabel}</div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {RANGE_PRESETS.map(({ key, label }) => {
+          const active = preset === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setPreset(key)}
+              aria-pressed={active}
+              className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                active
+                  ? "bg-emerald-600/20 border-emerald-500/60 text-emerald-300"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {preset === "custom" && (
+        <div className="grid grid-cols-2 gap-2 sm:max-w-md">
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            วันเริ่มต้น
+            <input
+              type="date"
+              value={customStart}
+              max={todayStr}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setCustomStart(v);
+                if (v > customEnd) setCustomEnd(v);
+              }}
+              className={dateInputClass}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            วันสิ้นสุด
+            <input
+              type="date"
+              value={customEnd}
+              min={customStart}
+              max={todayStr}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setCustomEnd(v);
+                if (v < customStart) setCustomStart(v);
+              }}
+              className={dateInputClass}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PnLChart({
-  days,
+  axisLabels,
+  slots,
+  fullDates,
   cumulative,
   daily,
   hasData,
+  loading,
   accountId,
   setAccountId,
   accountLabels,
-  prevMonth,
-  nextMonth,
-  goToday,
-  isCurrentMonth,
-  monthName,
-}: ReturnType<typeof useMonthlyHistory>) {
-  const monthTotal = cumulative[cumulative.length - 1] ?? 0;
-  const { W, H, padL, padR, yFor, xFor, ticks, xLabels } = chartScales(cumulative, days);
+}: ReturnType<typeof useRangeHistory>) {
+  const rangeTotal = cumulative[cumulative.length - 1] ?? 0;
+  const { W, H, padL, padR, yFor, xFor, ticks, xLabelIdx } = chartScales(cumulative, slots);
   const zeroY = yFor(0);
+  const color = rangeTotal >= 0 ? "#34d399" : "#f87171";
 
   const linePoints = cumulative.map((v, i) => [xFor(i), yFor(v)] as const);
   const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
-  const areaPath =
-    `M${linePoints[0][0]},${zeroY} ` +
-    linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
-    ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`;
+  const areaPath = linePoints.length
+    ? `M${linePoints[0][0]},${zeroY} ` +
+      linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+      ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`
+    : "";
+  const showDots = linePoints.length <= 62;
 
   const gradId = `pnlGrad-${accountId}`;
 
@@ -808,7 +1007,7 @@ function PnLChart({
       <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <div className="text-sm font-medium flex items-center gap-1.5">
-            {monthTotal >= 0 ? (
+            {rangeTotal >= 0 ? (
               <TrendingUp className="h-4 w-4 text-emerald-400" />
             ) : (
               <TrendingDown className="h-4 w-4 text-red-400" />
@@ -826,28 +1025,20 @@ function PnLChart({
             ))}
           </select>
         </div>
-        <div className={`text-lg font-semibold ${monthTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-          {monthTotal >= 0 ? "+" : ""}{monthTotal.toFixed(2)} USD
+        <div className={`text-lg font-semibold ${rangeTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+          {rangeTotal >= 0 ? "+" : ""}{rangeTotal.toFixed(2)} USD
         </div>
       </div>
-      <div className="flex items-center gap-2 mb-2">
-        <button onClick={prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
-        <span className="text-sm font-medium min-w-32 text-center">{monthName}</span>
-        <button onClick={nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
-        {!isCurrentMonth && (
-          <button onClick={goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
-            <RotateCcw className="h-3.5 w-3.5" /> วันนี้
-          </button>
-        )}
-      </div>
-      {!hasData ? (
+      {loading ? (
         <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : !hasData ? (
+        <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">ไม่มีข้อมูลในช่วงเวลานี้</div>
       ) : (
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[170px]">
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={monthTotal >= 0 ? "#34d399" : "#f87171"} stopOpacity={0.35} />
-              <stop offset="100%" stopColor={monthTotal >= 0 ? "#34d399" : "#f87171"} stopOpacity={0} />
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
 
@@ -860,20 +1051,20 @@ function PnLChart({
             </g>
           ))}
 
-          {xLabels.map((d) => (
-            <text key={d} x={xFor(days.indexOf(d))} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
-              {d}
+          {xLabelIdx.map((i) => (
+            <text key={i} x={xFor(i)} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {axisLabels[i]}
             </text>
           ))}
 
           <path d={areaPath} fill={`url(#${gradId})`} />
-          <path d={linePath} fill="none" stroke={monthTotal >= 0 ? "#34d399" : "#f87171"} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          <path d={linePath} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
 
           {linePoints.map(([x, y], i) => (
             <g key={i}>
-              <circle cx={x} cy={y} r={2.5} fill={monthTotal >= 0 ? "#34d399" : "#f87171"} />
-              <circle cx={x} cy={y} r={8} fill="transparent">
-                <title>{`วันที่ ${days[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (วันนี้ ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
+              {showDots && <circle cx={x} cy={y} r={2.5} fill={color} />}
+              <circle cx={x} cy={y} r={showDots ? 8 : 4} fill="transparent">
+                <title>{`${fullDates[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (รายวัน ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
               </circle>
             </g>
           ))}
@@ -884,12 +1075,15 @@ function PnLChart({
 }
 
 function DrawdownChart({
-  days,
+  axisLabels,
+  slots,
+  fullDates,
   cumulative,
   hasData,
+  loading,
   accountId,
   accountLabels,
-}: ReturnType<typeof useMonthlyHistory>) {
+}: ReturnType<typeof useRangeHistory>) {
   let peak = 0;
   const drawdown = cumulative.map((v) => {
     peak = Math.max(peak, v);
@@ -903,19 +1097,20 @@ function DrawdownChart({
   const plotH = H - padT - padB;
   const ddRange = Math.max(1, -maxDrawdown);
   const yFor = (v: number) => padT + (-v / ddRange) * plotH;
-  const xFor = (i: number) => padL + (days.length === 1 ? plotW / 2 : (plotW * i) / (days.length - 1));
+  const xFor = (i: number) => padL + (slots === 1 ? plotW / 2 : (plotW * i) / (slots - 1));
   const zeroY = yFor(0);
 
-  const dayStep = Math.ceil(days.length / 6);
-  const xLabels = days.filter((d, i) => i % dayStep === 0 || i === days.length - 1);
+  const xLabelIdx = labelIndices(slots);
   const ticks = [0, maxDrawdown / 2, maxDrawdown].filter((v, i, arr) => arr.indexOf(v) === i);
 
   const linePoints = drawdown.map((v, i) => [xFor(i), yFor(v)] as const);
   const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
-  const areaPath =
-    `M${linePoints[0][0]},${zeroY} ` +
-    linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
-    ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`;
+  const areaPath = linePoints.length
+    ? `M${linePoints[0][0]},${zeroY} ` +
+      linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+      ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`
+    : "";
+  const showDots = linePoints.length <= 62;
 
   const gradId = `ddGrad-${accountId}`;
   const currentLabel = accountId === "all" ? "ทุกพอร์ต" : accountLabels[accountId] ?? `Account ${accountId}`;
@@ -932,8 +1127,10 @@ function DrawdownChart({
           {maxDrawdown.toFixed(2)} USD
         </div>
       </div>
-      {!hasData ? (
+      {loading ? (
         <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm" style={{ minHeight: 140 }}>กำลังโหลด...</div>
+      ) : !hasData ? (
+        <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm" style={{ minHeight: 140 }}>ไม่มีข้อมูลในช่วงเวลานี้</div>
       ) : (
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" style={{ minHeight: 140 }}>
           <defs>
@@ -952,9 +1149,9 @@ function DrawdownChart({
             </g>
           ))}
 
-          {xLabels.map((d) => (
-            <text key={d} x={xFor(days.indexOf(d))} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
-              {d}
+          {xLabelIdx.map((i) => (
+            <text key={i} x={xFor(i)} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {axisLabels[i]}
             </text>
           ))}
 
@@ -963,9 +1160,9 @@ function DrawdownChart({
 
           {linePoints.map(([x, y], i) => (
             <g key={i}>
-              <circle cx={x} cy={y} r={2} fill="#f87171" />
-              <circle cx={x} cy={y} r={8} fill="transparent">
-                <title>{`วันที่ ${days[i]}: drawdown ${drawdown[i].toFixed(2)} USD`}</title>
+              {showDots && <circle cx={x} cy={y} r={2} fill="#f87171" />}
+              <circle cx={x} cy={y} r={showDots ? 8 : 4} fill="transparent">
+                <title>{`${fullDates[i]}: drawdown ${drawdown[i].toFixed(2)} USD`}</title>
               </circle>
             </g>
           ))}

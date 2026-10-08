@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 try:
     import MetaTrader5 as mt5
@@ -80,6 +81,32 @@ _mock_positions = {
 }
 
 _active_account = None
+
+
+def resolve_range(year: Optional[int], month: Optional[int], start: Optional[str], end: Optional[str]):
+    """Return (date_from, date_to) in UTC, date_to exclusive.
+
+    Accepts either an inclusive start/end date pair (YYYY-MM-DD) or a year+month.
+    """
+    if start and end:
+        try:
+            date_from = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            date_to = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start/end must be YYYY-MM-DD")
+        if date_to <= date_from:
+            raise HTTPException(status_code=400, detail="end must not be before start")
+        return date_from, date_to
+
+    if year and month:
+        date_from = datetime(year, month, 1, tzinfo=timezone.utc)
+        if month == 12:
+            date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        return date_from, date_to
+
+    raise HTTPException(status_code=400, detail="Provide year+month or start+end")
 
 
 def validate_account(account_id: int):
@@ -387,32 +414,31 @@ def get_overview():
 @app.get("/api/history/{account_id}")
 def get_history(
     account_id: int,
-    year: int = Query(...),
-    month: int = Query(...),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    granularity: str = Query("day"),
 ):
     ensure_connection(account_id)
+    date_from, date_to = resolve_range(year, month, start, end)
+    key_format = "%Y-%m-%dT%H:00:00Z" if granularity == "hour" else "%Y-%m-%d"
 
     if MOCK_MODE:
         return []
-
-    date_from = datetime(year, month, 1, tzinfo=timezone.utc)
-    if month == 12:
-        date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
 
     deals = mt5.history_deals_get(date_from, date_to)
     if deals is None:
         return []
 
-    # Group closing deals by date
+    # Group closing deals by date (or by hour when granularity=hour)
     daily: dict = {}
     for d in deals:
         # entry 1 = DEAL_ENTRY_OUT (closing), skip balance/deposit deals (type != 0,1)
         if d.entry != 1:
             continue
         dt = datetime.fromtimestamp(d.time, tz=timezone.utc)
-        day_key = dt.strftime("%Y-%m-%d")
+        day_key = dt.strftime(key_format)
         if day_key not in daily:
             daily[day_key] = {"date": day_key, "profit": 0.0, "trades": 0}
         daily[day_key]["profit"] += d.profit + d.commission + d.swap
@@ -424,19 +450,16 @@ def get_history(
 @app.get("/api/symbol_stats/{account_id}")
 def get_symbol_stats(
     account_id: int,
-    year: int = Query(...),
-    month: int = Query(...),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
 ):
     ensure_connection(account_id)
+    date_from, date_to = resolve_range(year, month, start, end)
 
     if MOCK_MODE:
         return []
-
-    date_from = datetime(year, month, 1, tzinfo=timezone.utc)
-    if month == 12:
-        date_to = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        date_to = datetime(year, month + 1, 1, tzinfo=timezone.utc)
 
     deals = mt5.history_deals_get(date_from, date_to)
     if deals is None:
