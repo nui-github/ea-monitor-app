@@ -32,6 +32,63 @@ else:
         "MN1": mt5.TIMEFRAME_MN1,
     }
 
+# Side-selection rule the EAs use (same for v1.8 and v2.09):
+#   BUY : last closed H4 bar closes above EMA20, EMA20 above EMA60, and H1 ADX(14) >= 20
+#   SELL: mirror image (close below EMA20, EMA20 below EMA60, ADX >= 20)
+#   otherwise no trend -> EA waits. The EA only re-evaluates when an H4 bar closes.
+EA_SIGNAL_RULE = {"ema_fast": 20, "ema_slow": 60, "adx_period": 14, "adx_min": 20.0}
+EA_DEFAULT_SYMBOL = {1: "XAUUSDm", 2: "XAUUSDm"}
+H4_SECONDS = 4 * 3600
+H1_SECONDS = 3600
+
+
+def ema_last(values, period):
+    """EMA as MT5 computes it: seeded with the first value, alpha = 2 / (period + 1)."""
+    alpha = 2.0 / (period + 1)
+    ema = values[0]
+    for v in values[1:]:
+        ema = alpha * v + (1 - alpha) * ema
+    return ema
+
+
+def adx_last(highs, lows, closes, period):
+    """Wilder ADX of the last bar, or None when there are too few bars."""
+    n = len(closes)
+    if n < period * 2 + 1:
+        return None
+    tr, plus_dm, minus_dm = [], [], []
+    for i in range(1, n):
+        up = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+        tr.append(max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1])))
+
+    sm_tr = sum(tr[:period])
+    sm_plus = sum(plus_dm[:period])
+    sm_minus = sum(minus_dm[:period])
+    dx_values = []
+    for i in range(period, len(tr) + 1):
+        if i > period:
+            sm_tr = sm_tr - sm_tr / period + tr[i - 1]
+            sm_plus = sm_plus - sm_plus / period + plus_dm[i - 1]
+            sm_minus = sm_minus - sm_minus / period + minus_dm[i - 1]
+        if sm_tr == 0:
+            dx_values.append(0.0)
+            continue
+        plus_di = 100.0 * sm_plus / sm_tr
+        minus_di = 100.0 * sm_minus / sm_tr
+        di_sum = plus_di + minus_di
+        dx_values.append(0.0 if di_sum == 0 else 100.0 * abs(plus_di - minus_di) / di_sum)
+
+    if len(dx_values) < period:
+        return None
+    adx = sum(dx_values[:period]) / period
+    for dx in dx_values[period:]:
+        adx = (adx * (period - 1) + dx) / period
+    return adx
+
+
 app = FastAPI(title="MT5 EA Monitor API")
 
 app.add_middleware(
@@ -235,6 +292,83 @@ def get_orders(account_id: int):
             "tp": o.tp,
         })
     return result
+
+
+@app.get("/api/ea_signal/{account_id}")
+def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
+    """Recompute the EAs' side-selection filter from MT5 candles.
+
+    This mirrors the EA's rule rather than reading it from the EA (the MT5 Python API
+    cannot see inside a compiled EA), so values are an estimate of what the EA saw at
+    its last H4-close check.
+    """
+    ensure_connection(account_id)
+    symbol = symbol or EA_DEFAULT_SYMBOL.get(account_id, "XAUUSDm")
+    rule = EA_SIGNAL_RULE
+
+    if MOCK_MODE:
+        return {
+            "symbol": symbol, "signal": "BUY", "h4_close": 2351.2, "ema_fast": 2342.8, "ema_slow": 2330.1,
+            "adx": 24.6, "adx_now": 26.1, "adx_min": rule["adx_min"],
+            "price_vs_fast": "above", "fast_vs_slow": "above", "adx_ok": True,
+            "decided_at": 1700000000, "next_check": 1700000000 + H4_SECONDS, "rule": rule,
+        }
+
+    mt5.symbol_select(symbol, True)
+    h4 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 400)
+    h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 600)
+    if h4 is None or h1 is None or len(h4) < rule["ema_slow"] + 3 or len(h1) < rule["adx_period"] * 3:
+        raise HTTPException(status_code=503, detail=f"Not enough candle data for {symbol}")
+
+    # The last bar returned is the one still forming; its open time is the moment the
+    # previous H4 bar closed, i.e. when the EA last made its decision.
+    decided_at = int(h4[-1]["time"])
+    closes = [float(r["close"]) for r in h4[:-1]]
+    h4_close = closes[-1]
+    ema_fast = ema_last(closes, rule["ema_fast"])
+    ema_slow = ema_last(closes, rule["ema_slow"])
+
+    def adx_of(rows):
+        return adx_last(
+            [float(r["high"]) for r in rows],
+            [float(r["low"]) for r in rows],
+            [float(r["close"]) for r in rows],
+            rule["adx_period"],
+        )
+
+    adx_at_decision = adx_of([r for r in h1 if int(r["time"]) <= decided_at - H1_SECONDS])
+    adx_now = adx_of(h1[:-1])
+
+    def side(a, b):
+        return "above" if a > b else "below" if a < b else "equal"
+
+    price_vs_fast = side(h4_close, ema_fast)
+    fast_vs_slow = side(ema_fast, ema_slow)
+    adx_ok = adx_at_decision is not None and adx_at_decision >= rule["adx_min"]
+
+    if adx_ok and price_vs_fast == "above" and fast_vs_slow == "above":
+        signal = "BUY"
+    elif adx_ok and price_vs_fast == "below" and fast_vs_slow == "below":
+        signal = "SELL"
+    else:
+        signal = "WAIT"
+
+    return {
+        "symbol": symbol,
+        "signal": signal,
+        "h4_close": h4_close,
+        "ema_fast": ema_fast,
+        "ema_slow": ema_slow,
+        "adx": adx_at_decision,
+        "adx_now": adx_now,
+        "adx_min": rule["adx_min"],
+        "price_vs_fast": price_vs_fast,
+        "fast_vs_slow": fast_vs_slow,
+        "adx_ok": adx_ok,
+        "decided_at": decided_at,
+        "next_check": decided_at + H4_SECONDS,
+        "rule": rule,
+    }
 
 
 @app.get("/api/tick/{account_id}")

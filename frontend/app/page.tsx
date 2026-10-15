@@ -38,6 +38,8 @@ import {
   CandlestickChart,
   Clock,
   ChevronDown,
+  Bot,
+  Check,
 } from "lucide-react";
 
 const ACCOUNT_IDS = [1, 2];
@@ -245,6 +247,7 @@ export default function Home() {
         {tab === "overview" && <OverviewTab />}
         {tab === "positions" && (
           <div className="space-y-8">
+            <EaSignalDashboard />
             <LiveChartCard />
             {ACCOUNT_IDS.map((id) => (
               <AccountPanel key={id} accountId={id} label={`Account ${id}`} />
@@ -1775,6 +1778,212 @@ function LightweightCandleChart({
     <div className="relative w-full" data-no-pull-refresh>
       <div ref={legendRef} className="absolute top-2 left-2 z-50 text-[11px] font-mono pointer-events-none bg-zinc-800/90 border border-zinc-600 rounded px-2 py-1" />
       <div ref={containerRef} className="w-full" />
+    </div>
+  );
+}
+
+interface EaSignal {
+  symbol: string;
+  signal: "BUY" | "SELL" | "WAIT";
+  h4_close: number;
+  ema_fast: number;
+  ema_slow: number;
+  adx: number | null;
+  adx_now: number | null;
+  adx_min: number;
+  price_vs_fast: "above" | "below" | "equal";
+  fast_vs_slow: "above" | "below" | "equal";
+  adx_ok: boolean;
+  decided_at: number;
+  next_check: number;
+  rule: { ema_fast: number; ema_slow: number; adx_period: number; adx_min: number };
+}
+
+function useEaSignal(accountId: number, symbol: string | undefined) {
+  const [signal, setSignal] = useState<EaSignal | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    const fetchData = () => {
+      apiFetch(`/api/ea_signal/${accountId}${query}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad response"))))
+        .then((d: EaSignal) => { if (alive) { setSignal(d); setFailed(false); } })
+        .catch(() => { if (alive) setFailed(true); });
+    };
+    fetchData();
+    // The EA only re-decides when an H4 bar closes; ADX moves hourly. A minute is plenty.
+    const interval = setInterval(fetchData, 60000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId, symbol]);
+
+  return { signal, failed };
+}
+
+// MT5 candle times are server time stored as epoch, so reading them as UTC shows server time.
+function formatServerTime(t: number) {
+  return new Date(t * 1000).toLocaleString("th-TH", {
+    timeZone: "UTC", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
+function EaSignalCard({ accountId, label }: { accountId: number; label: string }) {
+  const positions = useAccountPositions(accountId);
+  const orders = useAccountOrders(accountId);
+  const symbol = positions[0]?.symbol ?? orders[0]?.symbol;
+  const { signal, failed } = useEaSignal(accountId, symbol);
+
+  const buys = positions.filter((p) => p.type === "BUY");
+  const sells = positions.filter((p) => p.type === "SELL");
+  const sumVolume = (list: Position[]) => list.reduce((s, p) => s + p.volume, 0);
+  const pendingBuy = orders.filter((o) => o.type.startsWith("BUY")).length;
+  const pendingSell = orders.filter((o) => o.type.startsWith("SELL")).length;
+
+  let sideText: string;
+  let sideClass: string;
+  if (buys.length > 0 && sells.length > 0) {
+    sideText = "BUY + SELL"; sideClass = "bg-amber-900/50 text-amber-300";
+  } else if (buys.length > 0) {
+    sideText = "BUY"; sideClass = "bg-emerald-900/50 text-emerald-300";
+  } else if (sells.length > 0) {
+    sideText = "SELL"; sideClass = "bg-red-900/50 text-red-300";
+  } else if (pendingBuy > 0 && pendingSell === 0) {
+    sideText = "รอเข้า BUY"; sideClass = "bg-emerald-900/30 text-emerald-300";
+  } else if (pendingSell > 0 && pendingBuy === 0) {
+    sideText = "รอเข้า SELL"; sideClass = "bg-red-900/30 text-red-300";
+  } else if (pendingBuy > 0 && pendingSell > 0) {
+    sideText = "รอเข้า BUY + SELL"; sideClass = "bg-amber-900/30 text-amber-300";
+  } else {
+    sideText = "ไม่มีไม้"; sideClass = "bg-zinc-800 text-zinc-400";
+  }
+
+  const signalText = !signal ? "" : signal.signal === "BUY" ? "BUY อย่างเดียว" : signal.signal === "SELL" ? "SELL อย่างเดียว" : "no trend – waiting";
+  const signalClass = !signal
+    ? "bg-zinc-800 text-zinc-400"
+    : signal.signal === "BUY" ? "bg-emerald-900/50 text-emerald-300"
+    : signal.signal === "SELL" ? "bg-red-900/50 text-red-300"
+    : "bg-zinc-800 text-zinc-300";
+
+  let note: string | null = null;
+  if (signal) {
+    const oppositeOpen = signal.signal === "BUY" ? sells.length : signal.signal === "SELL" ? buys.length : 0;
+    if (oppositeOpen > 0) {
+      note = `สัญญาณเป็น ${signal.signal} แต่ยังมีไม้ฝั่งตรงข้ามค้าง ${oppositeOpen} ไม้ — EA หยุดเปิดไม้ฝั่งเก่า รอปิดหมดก่อนเริ่มฝั่งใหม่`;
+    } else if (signal.signal === "WAIT") {
+      note = "ไม่มีเทรนด์ชัดเจน — EA รอ ไม่เปิดไม้ใหม่";
+    }
+  }
+
+  const relation = (r: "above" | "below" | "equal") => (r === "above" ? ">" : r === "below" ? "<" : "=");
+  const relationColor = (r: "above" | "below" | "equal") =>
+    r === "above" ? "text-emerald-400" : r === "below" ? "text-red-400" : "text-zinc-400";
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate">{label}</div>
+          <div className="text-xs text-zinc-500">{signal?.symbol ?? symbol ?? ""}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[11px] text-zinc-500 mb-0.5">กำลังเล่น</div>
+          <span className={`inline-block text-xs font-semibold px-2 py-1 rounded-full ${sideClass}`}>{sideText}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">BUY</div>
+          <div className="font-medium text-emerald-400">{buys.length} ไม้ · {sumVolume(buys).toFixed(2)} lot</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">SELL</div>
+          <div className="font-medium text-red-400">{sells.length} ไม้ · {sumVolume(sells).toFixed(2)} lot</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">Pending</div>
+          <div className="font-medium text-amber-300">{orders.length} order</div>
+        </div>
+      </div>
+
+      <div className="border-t border-zinc-800 pt-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+            <Bot className="h-3.5 w-3.5" /> สัญญาณจากตัวกรอง
+          </div>
+          {signal && <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${signalClass}`}>{signalText}</span>}
+        </div>
+
+        {!signal ? (
+          <div className="text-xs text-zinc-500 py-1">{failed ? "ดึงค่า indicator ไม่ได้" : "กำลังโหลด..."}</div>
+        ) : (
+          <>
+            <div className="space-y-1.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">H4 Close vs EMA{signal.rule.ema_fast}</span>
+                <span className={`font-mono ${relationColor(signal.price_vs_fast)}`}>
+                  {signal.h4_close.toFixed(2)} {relation(signal.price_vs_fast)} {signal.ema_fast.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">EMA{signal.rule.ema_fast} vs EMA{signal.rule.ema_slow} (H4)</span>
+                <span className={`font-mono ${relationColor(signal.fast_vs_slow)}`}>
+                  {signal.ema_fast.toFixed(2)} {relation(signal.fast_vs_slow)} {signal.ema_slow.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">ADX({signal.rule.adx_period}) H1 ≥ {signal.adx_min}</span>
+                <span className={`font-mono flex items-center gap-1 ${signal.adx_ok ? "text-emerald-400" : "text-red-400"}`}>
+                  {signal.adx_ok ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                  {signal.adx !== null ? signal.adx.toFixed(1) : "—"}
+                </span>
+              </div>
+            </div>
+
+            {note && (
+              <div className="text-xs rounded-lg bg-zinc-800/60 border border-zinc-700 px-2.5 py-2 text-zinc-300">{note}</div>
+            )}
+
+            <div className="text-[11px] text-zinc-500 space-y-0.5">
+              <div>
+                ตัดสินเมื่อ {formatServerTime(signal.decided_at)} · เช็กถัดไป {formatServerTime(signal.next_check)} (เวลาเซิร์ฟเวอร์)
+              </div>
+              <div>
+                ADX ตอนนี้ {signal.adx_now !== null ? signal.adx_now.toFixed(1) : "—"} · ค่าประมาณจากแท่งเทียน MT5 ไม่ใช่ค่าที่ EA อ่านจริง
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EaSignalDashboard() {
+  const [labels, setLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setLabels(Object.fromEntries(entries)));
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium flex items-center gap-1.5">
+        <Bot className="h-4 w-4" /> EA Dashboard
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {ACCOUNT_IDS.map((id) => (
+          <EaSignalCard key={id} accountId={id} label={labels[id] ?? `Account ${id}`} />
+        ))}
+      </div>
     </div>
   );
 }
