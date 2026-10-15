@@ -1796,6 +1796,8 @@ interface EaSignal {
   adx_ok: boolean;
   decided_at: number;
   next_check: number;
+  price_now?: number | null;
+  flip?: { buy_above: number; sell_below: number; cross_price: number };
   rule: { ema_fast: number; ema_slow: number; adx_period: number; adx_min: number };
 }
 
@@ -1875,6 +1877,25 @@ function EaSignalCard({ accountId, label }: { accountId: number; label: string }
     }
   }
 
+  // What the next H4 close must do to change the side (EA only re-decides at H4 close).
+  const flipRows: { to: "BUY" | "SELL" | "no trend"; cond: string; target: number | null }[] = [];
+  if (signal?.flip) {
+    const { buy_above, sell_below } = signal.flip;
+    const adxMin = signal.adx_min;
+    if (signal.signal === "SELL") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดเหนือ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+    } else if (signal.signal === "BUY") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดใต้ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    } else {
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    }
+  }
+  const flipToClass = (to: string) =>
+    to === "BUY" ? "text-emerald-400" : to === "SELL" ? "text-red-400" : "text-zinc-300";
+
   const relation = (r: "above" | "below" | "equal") => (r === "above" ? ">" : r === "below" ? "<" : "=");
   const relationColor = (r: "above" | "below" | "equal") =>
     r === "above" ? "text-emerald-400" : r === "below" ? "text-red-400" : "text-zinc-400";
@@ -1940,6 +1961,33 @@ function EaSignalCard({ accountId, label }: { accountId: number; label: string }
                 </span>
               </div>
             </div>
+
+            {flipRows.length > 0 && (
+              <div className="border-t border-zinc-800 pt-2.5 space-y-1.5">
+                <div className="text-xs text-zinc-400">
+                  จะเปลี่ยนหน้าเล่นเมื่อ <span className="text-zinc-300">แท่ง H4 ปิดรอบถัดไป ({formatServerTime(signal.next_check)})</span>
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {flipRows.map((row) => (
+                    <div key={row.to} className="flex items-start gap-2">
+                      <span className={`shrink-0 w-16 font-semibold ${flipToClass(row.to)}`}>→ {row.to}</span>
+                      <span className="text-zinc-300">
+                        {row.cond}
+                        {signal.price_now != null && row.target !== null && (
+                          <span className="text-zinc-500">
+                            {" "}(ห่างจากราคาตอนนี้ {Math.abs(row.target - signal.price_now).toFixed(2)})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] text-zinc-500">
+                  {signal.price_now != null && `ราคาตอนนี้ ${signal.price_now.toFixed(2)} · `}
+                  ADX ต้องห่างจาก {signal.adx_min} อีก {signal.adx !== null ? Math.abs(signal.adx - signal.adx_min).toFixed(1) : "—"} จุด · ระหว่างรอบ EA ไม่เปลี่ยนฝั่ง
+                </div>
+              </div>
+            )}
 
             {note && (
               <div className="text-xs rounded-lg bg-zinc-800/60 border border-zinc-700 px-2.5 py-2 text-zinc-300">{note}</div>

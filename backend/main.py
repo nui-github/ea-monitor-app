@@ -312,6 +312,8 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
             "adx": 24.6, "adx_now": 26.1, "adx_min": rule["adx_min"],
             "price_vs_fast": "above", "fast_vs_slow": "above", "adx_ok": True,
             "decided_at": 1700000000, "next_check": 1700000000 + H4_SECONDS, "rule": rule,
+            "price_now": 2351.5,
+            "flip": {"buy_above": 2342.8, "sell_below": 2342.8, "cross_price": 2300.0},
         }
 
     mt5.symbol_select(symbol, True)
@@ -353,6 +355,18 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
     else:
         signal = "WAIT"
 
+    # What the next H4 close has to do to change the side. A close c moves each EMA to
+    # a*c + (1-a)*prev, so:
+    #   close > EMA20 after the update  <=>  c > current EMA20
+    #   EMA20 > EMA60 after the update  <=>  c > cross_price (solved below; the inequality
+    #                                        flips because the faster EMA has the larger alpha)
+    # Every other flip condition is ADX >= adx_min, which depends on H1 bars and has no
+    # single price threshold.
+    a_fast = 2.0 / (rule["ema_fast"] + 1)
+    a_slow = 2.0 / (rule["ema_slow"] + 1)
+    cross_price = ((1 - a_slow) * ema_slow - (1 - a_fast) * ema_fast) / (a_fast - a_slow)
+    tick = mt5.symbol_info_tick(symbol)
+
     return {
         "symbol": symbol,
         "signal": signal,
@@ -367,6 +381,12 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
         "adx_ok": adx_ok,
         "decided_at": decided_at,
         "next_check": decided_at + H4_SECONDS,
+        "price_now": tick.bid if tick else None,
+        "flip": {
+            "buy_above": max(ema_fast, cross_price),
+            "sell_below": min(ema_fast, cross_price),
+            "cross_price": cross_price,
+        },
         "rule": rule,
     }
 
