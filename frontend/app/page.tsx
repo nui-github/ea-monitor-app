@@ -1622,6 +1622,18 @@ function useAccountOrders(accountId: number) {
   return orders;
 }
 
+// Price-line titles sit on top of the candles, so keep them short: the order type
+// abbreviated and only the last 4 digits of the ticket.
+const ORDER_TYPE_SHORT: Record<string, string> = {
+  "BUY LIMIT": "B.LMT",
+  "SELL LIMIT": "S.LMT",
+  "BUY STOP": "B.STOP",
+  "SELL STOP": "S.STOP",
+  "BUY STOP LIMIT": "B.STL",
+  "SELL STOP LIMIT": "S.STL",
+};
+const shortTicket = (ticket: number) => String(ticket).slice(-4);
+
 function LightweightCandleChart({
   candles,
   positions,
@@ -1660,7 +1672,7 @@ function LightweightCandleChart({
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       height,
-      layout: { background: { color: "transparent" }, textColor: "#a1a1aa" },
+      layout: { background: { color: "transparent" }, textColor: "#a1a1aa", fontSize: 10 },
       grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
       timeScale: { timeVisible: true, secondsVisible: false, borderColor: "#3f3f46" },
       rightPriceScale: { borderColor: "#3f3f46" },
@@ -1744,7 +1756,7 @@ function LightweightCandleChart({
     positions.forEach((p) => {
       const color = p.type === "BUY" ? "#34d399" : "#f87171";
       priceLinesRef.current.push(
-        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.LargeDashed, title: `${p.type} #${p.ticket}` })
+        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.LargeDashed, title: `${p.type} ${shortTicket(p.ticket)}` })
       );
       if (p.sl > 0) {
         priceLinesRef.current.push(
@@ -1759,7 +1771,7 @@ function LightweightCandleChart({
     });
     orders.forEach((o) => {
       priceLinesRef.current.push(
-        seriesRef.current!.createPriceLine({ price: o.price_open, color: "#fbbf24", lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${o.type} #${o.ticket}` })
+        seriesRef.current!.createPriceLine({ price: o.price_open, color: "#fbbf24", lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${ORDER_TYPE_SHORT[o.type] ?? o.type} ${shortTicket(o.ticket)}` })
       );
       if (o.sl > 0) {
         priceLinesRef.current.push(
@@ -2036,6 +2048,9 @@ function EaSignalDashboard() {
   );
 }
 
+// Shown in the chart picker even when the account has nothing open (matches the backend EA default).
+const DEFAULT_CHART_SYMBOL = "XAUUSDm";
+
 const CHART_MIN_HEIGHT = 200;
 const CHART_MAX_HEIGHT = 700;
 
@@ -2085,12 +2100,22 @@ function LiveChartCard() {
 
   const positions = useAccountPositions(accountId);
   const orders = useAccountOrders(accountId);
-  const symbols = Array.from(new Set([...positions.map((p) => p.symbol), ...orders.map((o) => o.symbol)]));
+  // Symbols the account is trading come first; the default is always selectable so the
+  // chart works even when nothing is open.
+  const tradedSymbols = Array.from(new Set([...positions.map((p) => p.symbol), ...orders.map((o) => o.symbol)]));
+  const symbols = Array.from(new Set([...tradedSymbols, DEFAULT_CHART_SYMBOL]));
+  const [symbolPicked, setSymbolPicked] = useState(false);
+
+  useEffect(() => { setSymbolPicked(false); }, [accountId]);
 
   useEffect(() => {
-    if (symbols.length > 0 && !symbols.includes(symbol)) setSymbol(symbols[0]);
-    if (symbols.length === 0 && symbol) setSymbol("");
-  }, [symbols.join(","), symbol]);
+    // Until the user picks one, follow what the account is actually trading.
+    if (!symbolPicked && tradedSymbols.length > 0) {
+      if (symbol !== tradedSymbols[0]) setSymbol(tradedSymbols[0]);
+      return;
+    }
+    if (!symbols.includes(symbol)) setSymbol(symbols[0]);
+  }, [symbols.join(","), tradedSymbols.join(","), symbol, symbolPicked]);
 
   const { candles, loading } = useCandles(accountId, symbol, timeframe);
   const tick = useTick(accountId, symbol);
@@ -2113,17 +2138,15 @@ function LiveChartCard() {
               <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
             ))}
           </select>
-          {symbols.length > 0 && (
-            <select
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
-            >
-              {symbols.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          )}
+          <select
+            value={symbol}
+            onChange={(e) => { setSymbol(e.target.value); setSymbolPicked(true); }}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {symbols.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
           <select
             value={timeframe}
             onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}
@@ -2136,10 +2159,10 @@ function LiveChartCard() {
         </div>
       </div>
 
-      {symbols.length === 0 ? (
-        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มี position หรือ order เปิดอยู่</div>
-      ) : loading || candles.length === 0 ? (
+      {loading || !symbol ? (
         <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : candles.length === 0 ? (
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มีข้อมูลแท่งเทียนของ {symbol}</div>
       ) : (
         <>
           <LightweightCandleChart candles={candles} positions={symbolPositions} orders={symbolOrders} tick={tick} timeframe={timeframe} height={chartHeight} />
