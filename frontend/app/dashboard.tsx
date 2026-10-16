@@ -1,0 +1,2429 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { createChart, IChartApi, ISeriesApi, IPriceLine, LineStyle, UTCTimestamp } from "lightweight-charts";
+import {
+  Activity,
+  RotateCw,
+  LayoutDashboard,
+  Wallet,
+  CalendarDays,
+  TrendingUp,
+  TrendingDown,
+  ListOrdered,
+  DollarSign,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
+  Wifi,
+  WifiOff,
+  Scale,
+  Landmark,
+  Gauge,
+  OctagonX,
+  AlertTriangle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Repeat,
+  Target,
+  Waves,
+  BarChart3,
+  GitCompare,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Equal,
+  History,
+  X,
+  PiggyBank,
+  CandlestickChart,
+  Clock,
+  ChevronDown,
+  Bot,
+  Check,
+} from "lucide-react";
+
+const ACCOUNT_IDS = [1, 2];
+
+function apiFetch(url: string, init?: RequestInit) {
+  return fetch(url, init);
+}
+
+interface Account {
+  balance: number;
+  equity: number;
+  margin: number;
+  free_margin: number;
+  margin_level: number;
+  currency: string;
+  login: number;
+  name: string;
+  company: string;
+  server: string;
+  trade_mode: string;
+}
+
+interface Position {
+  ticket: number;
+  symbol: string;
+  type: string;
+  volume: number;
+  price_open: number;
+  price_current: number;
+  sl: number;
+  tp: number;
+  profit: number;
+}
+
+interface PendingOrder {
+  ticket: number;
+  symbol: string;
+  type: string;
+  volume: number;
+  price_open: number;
+  sl: number;
+  tp: number;
+}
+
+interface OverviewAccount {
+  account_id: number;
+  login?: number;
+  name?: string;
+  company?: string;
+  server?: string;
+  trade_mode?: string;
+  currency?: string;
+  balance?: number;
+  equity?: number;
+  free_margin?: number;
+  margin_level?: number;
+  open_positions?: number;
+  floating_profit?: number;
+  error?: string;
+}
+
+interface Overview {
+  total_balance: number;
+  total_equity: number;
+  total_floating_profit: number;
+  total_open_positions: number;
+  accounts: OverviewAccount[];
+}
+
+interface DayHistory {
+  date: string;
+  profit: number;
+  trades: number;
+}
+
+
+const PULL_THRESHOLD = 70;
+const PULL_MAX = 100;
+const PULL_SHIFT = 50;
+
+function usePullToRefresh() {
+  const [progress, setProgress] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const startYRef = useRef<number | null>(null);
+  const pullingRef = useRef(false);
+
+  useEffect(() => {
+    if (refreshing) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if ((e.target as HTMLElement).closest("[data-no-pull-refresh]")) {
+        pullingRef.current = false;
+        return;
+      }
+      if (window.scrollY <= 0) {
+        startYRef.current = e.touches[0].clientY;
+        pullingRef.current = true;
+        setDragging(true);
+      } else {
+        pullingRef.current = false;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pullingRef.current || startYRef.current === null) return;
+      const diff = e.touches[0].clientY - startYRef.current;
+      if (diff <= 0 || window.scrollY > 0) {
+        pullingRef.current = false;
+        setDragging(false);
+        setProgress(0);
+        return;
+      }
+      e.preventDefault();
+      const eased = Math.min(diff * 0.5, PULL_MAX);
+      setProgress(eased / PULL_THRESHOLD);
+    };
+
+    const onTouchEnd = () => {
+      if (!pullingRef.current) return;
+      pullingRef.current = false;
+      setDragging(false);
+      setProgress((p) => {
+        if (p >= 1) {
+          setRefreshing(true);
+          setTimeout(() => window.location.reload(), 200);
+          return 1;
+        }
+        return 0;
+      });
+    };
+
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd);
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [refreshing]);
+
+  return { progress: Math.min(progress, 1), refreshing, dragging };
+}
+
+function PullToRefreshIndicator({ progress, refreshing }: { progress: number; refreshing: boolean }) {
+  if (progress <= 0 && !refreshing) return null;
+  const translate = -36 + progress * 56;
+
+  return (
+    <div
+      className="fixed left-0 right-0 z-50 flex justify-center pointer-events-none"
+      style={{ top: "env(safe-area-inset-top)", transform: `translateY(${translate}px)`, opacity: progress }}
+    >
+      <div className="bg-zinc-800 border border-zinc-700 rounded-full p-2 shadow-lg mt-2">
+        <RotateCw
+          className={`h-4 w-4 text-emerald-400 ${refreshing ? "animate-spin" : ""}`}
+          style={refreshing ? undefined : { transform: `rotate(${progress * 360}deg)` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+const NAV_ITEMS = [
+  { href: "/", label: "ภาพรวม", icon: LayoutDashboard },
+  { href: "/positions", label: "พอร์ต", icon: Wallet },
+  { href: "/calendar", label: "Calendar", icon: CalendarDays },
+] as const;
+
+// Shared chrome (sticky header, mobile bottom nav, pull-to-refresh) around every route.
+export function Shell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const { progress, refreshing, dragging } = usePullToRefresh();
+  const shiftPx = (refreshing ? 1 : progress) * PULL_SHIFT;
+  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans">
+      <PullToRefreshIndicator progress={progress} refreshing={refreshing} />
+      <div style={{ transform: `translateY(${shiftPx}px)`, transition: dragging ? "none" : "transform 0.25s ease" }}>
+      <header
+        className="sticky top-0 z-30 flex items-center gap-6 px-6 py-4 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur"
+        style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
+      >
+        <h1 className="text-xl font-semibold shrink-0 flex items-center gap-2">
+          <Activity className="h-5 w-5 text-emerald-400" />
+          EA Monitor
+        </h1>
+        <nav className="hidden sm:flex gap-1">
+          {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              aria-current={isActive(href) ? "page" : undefined}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors ${
+                isActive(href)
+                  ? "bg-zinc-700 text-white"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+
+      <main className="p-6 pb-24 sm:pb-6 max-w-5xl mx-auto">{children}</main>
+      </div>
+
+      <nav
+        className="sm:hidden fixed bottom-0 inset-x-0 bg-zinc-900/95 backdrop-blur border-t border-zinc-800 flex items-stretch z-40"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+          const active = isActive(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              aria-current={active ? "page" : undefined}
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 text-xs transition-colors ${
+                active ? "text-emerald-400" : "text-zinc-500"
+              }`}
+            >
+              <Icon className={`h-5 w-5 ${active ? "text-emerald-400" : "text-zinc-500"}`} />
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+// ─── Overview Tab ────────────────────────────────────────────────────────────
+
+export function OverviewTab() {
+  const [data, setData] = useState<Overview | null>(null);
+
+  useEffect(() => {
+    const fetch_ = async () => {
+      try {
+        const res = await apiFetch(`/api/overview`);
+        if (res.ok) setData(await res.json());
+      } catch {}
+    };
+    fetch_();
+    const iv = setInterval(fetch_, 3000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const profit = data?.total_floating_profit ?? 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="พอร์ต" value={String(ACCOUNT_IDS.length)} sub="พอร์ตเชื่อมต่อ" icon={Wallet} />
+        <StatCard label="ออเดอร์เปิด" value={String(data?.total_open_positions ?? "—")} sub="รวมทุกบัญชี" icon={ListOrdered} />
+        <StatCard label="Balance รวม" value={data ? `${data.total_balance.toFixed(2)}` : "—"} sub="USD" icon={DollarSign} />
+        <StatCard
+          label="กำไร/ขาดทุนลอยตัว"
+          value={data ? `${profit >= 0 ? "+" : ""}${profit.toFixed(2)}` : "—"}
+          sub="USD"
+          accent={data ? (profit >= 0 ? "green" : "red") : undefined}
+          icon={profit >= 0 ? TrendingUp : TrendingDown}
+        />
+      </div>
+
+      <PerformanceCharts />
+
+      <DepositWithdrawalPanel />
+
+      <div className="space-y-3">
+        {data?.accounts.map((acc) => (
+          <div key={acc.account_id} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+            {acc.error ? (
+              <div className="flex items-center gap-2 text-zinc-500">
+                <WifiOff className="h-4 w-4" />
+                <span>Account {acc.account_id} — Offline</span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Wifi className="h-3.5 w-3.5 text-emerald-500" />
+                    <span className="font-medium">{acc.company} · #{acc.login}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${acc.trade_mode === "Demo" ? "bg-yellow-900 text-yellow-300" : "bg-emerald-900 text-emerald-300"}`}>{acc.trade_mode}</span>
+                  </div>
+                  <div className="text-xs text-zinc-400 mt-0.5">{acc.name} · {acc.server}</div>
+                </div>
+                <div className="flex gap-6 text-sm text-right">
+                  <div>
+                    <div className="text-zinc-400 text-xs">Balance</div>
+                    <div className="font-medium">{acc.balance?.toFixed(2)} {acc.currency}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-400 text-xs">Equity</div>
+                    <div className="font-medium">{acc.equity?.toFixed(2)} {acc.currency}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-400 text-xs">Floating P/L</div>
+                    <div className={`font-medium ${(acc.floating_profit ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {(acc.floating_profit ?? 0) >= 0 ? "+" : ""}{acc.floating_profit?.toFixed(2)} {acc.currency}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-400 text-xs">Positions</div>
+                    <div className="font-medium">{acc.open_positions}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type RangePreset = "today" | "week" | "month" | "3m" | "6m" | "year" | "custom";
+
+const RANGE_PRESETS: { key: RangePreset; label: string }[] = [
+  { key: "today", label: "วันนี้" },
+  { key: "week", label: "อาทิตย์นี้" },
+  { key: "month", label: "เดือนนี้" },
+  { key: "3m", label: "3 เดือนล่าสุด" },
+  { key: "6m", label: "6 เดือนล่าสุด" },
+  { key: "year", label: "ปีล่าสุด" },
+  { key: "custom", label: "กำหนดเอง" },
+];
+
+const MAX_RANGE_DAYS = 1500;
+
+function toDateStr(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function parseDateStr(s: string) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function addDays(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+}
+
+function addMonths(d: Date, n: number) {
+  const first = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return new Date(first.getFullYear(), first.getMonth(), Math.min(d.getDate(), daysInMonth));
+}
+
+function formatDateTh(s: string) {
+  return parseDateStr(s).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function presetRange(preset: Exclude<RangePreset, "custom">, today: Date): { start: Date; end: Date } {
+  switch (preset) {
+    case "today":
+      return { start: today, end: today };
+    case "week": {
+      const monday = addDays(today, -((today.getDay() + 6) % 7));
+      return { start: monday, end: addDays(monday, 6) };
+    }
+    case "month":
+      return {
+        start: new Date(today.getFullYear(), today.getMonth(), 1),
+        end: new Date(today.getFullYear(), today.getMonth() + 1, 0),
+      };
+    case "3m":
+      return { start: addDays(addMonths(today, -3), 1), end: today };
+    case "6m":
+      return { start: addDays(addMonths(today, -6), 1), end: today };
+    case "year":
+      return { start: addDays(addMonths(today, -12), 1), end: today };
+  }
+}
+
+function useRangeHistory() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const now = new Date();
+  const todayStr = toDateStr(now);
+  const [preset, setPreset] = useState<RangePreset>("today");
+  const [customStart, setCustomStart] = useState(() => toDateStr(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [customEnd, setCustomEnd] = useState(todayStr);
+
+  let selectedStart: string;
+  let selectedEnd: string;
+  if (preset === "custom") {
+    selectedStart = customStart;
+    selectedEnd = customEnd;
+  } else {
+    const r = presetRange(preset, now);
+    selectedStart = toDateStr(r.start);
+    selectedEnd = toDateStr(r.end);
+  }
+  // Data only exists up to today, so clamp what we fetch and plot.
+  const end = selectedEnd > todayStr ? todayStr : selectedEnd;
+  const start = selectedStart > end ? end : selectedStart;
+  const rangeLabel =
+    selectedStart === selectedEnd
+      ? formatDateTh(selectedStart)
+      : `${formatDateTh(selectedStart)} – ${formatDateTh(selectedEnd)}`;
+
+  const [history, setHistory] = useState<DayHistory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [accountId, setAccountId] = useState<number | "all">("all");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  const hourly = preset === "today";
+
+  useEffect(() => {
+    if (!mounted) return;
+    let alive = true;
+    setLoading(true);
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/history/${id}?start=${start}&end=${end}${hourly ? "&granularity=hour" : ""}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as DayHistory[])
+      )
+    ).then((results) => {
+      if (!alive) return;
+      const merged: Record<string, DayHistory> = {};
+      results.flat().forEach((h: DayHistory) => {
+        if (merged[h.date]) merged[h.date].profit += h.profit;
+        else merged[h.date] = { ...h };
+      });
+      setHistory(Object.values(merged));
+      setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [mounted, start, end, accountId, hourly]);
+
+  const byDay: Record<string, number> = {};
+  history.forEach((h) => (byDay[h.date] = h.profit));
+
+  const dates: string[] = [];
+  let days: string[];
+  let axisLabels: string[];
+  let fullDates: string[];
+  let daily: number[];
+
+  if (hourly) {
+    // "Today" plots per hour on a fixed 0-23 axis; points run to the last hour with deals.
+    const hourOf = (iso: string) => Number(iso.slice(11, 13));
+    const byHour: Record<number, number> = {};
+    history.forEach((h) => (byHour[hourOf(h.date)] = (byHour[hourOf(h.date)] ?? 0) + h.profit));
+    const lastHour = history.length > 0 ? Math.max(...history.map((h) => hourOf(h.date))) : -1;
+    const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
+    axisLabels = Array.from({ length: 24 }, (_, h) => hourLabel(h));
+    days = axisLabels.slice(0, lastHour + 1);
+    fullDates = days.map((l) => `${formatDateTh(start)} ${l}`);
+    daily = days.map((_, h) => byHour[h] ?? 0);
+  } else {
+    if (mounted) {
+      for (let d = parseDateStr(start); toDateStr(d) <= end && dates.length < MAX_RANGE_DAYS; d = addDays(d, 1)) {
+        dates.push(toDateStr(d));
+      }
+    }
+    const sameMonth = start.slice(0, 7) === end.slice(0, 7);
+    days = dates.map((s) => (sameMonth ? String(Number(s.slice(8))) : `${Number(s.slice(8))}/${Number(s.slice(5, 7))}`));
+    axisLabels = days;
+    fullDates = dates.map(formatDateTh);
+    daily = dates.map((s) => byDay[s] ?? 0);
+  }
+
+  let running = 0;
+  const cumulative = daily.map((v) => (running += v));
+  const hasData = history.length > 0;
+
+  return {
+    start, end, mounted, preset, setPreset,
+    customStart, setCustomStart, customEnd, setCustomEnd, todayStr,
+    rangeLabel: mounted ? rangeLabel : "",
+    days, axisLabels, slots: axisLabels.length, fullDates, daily, cumulative, hasData, loading,
+    accountId, setAccountId, accountLabels,
+  };
+}
+
+interface AccountStat {
+  accountId: number;
+  profit: number;
+  trades: number;
+}
+
+function useAccountComparison(start: string, end: string) {
+  const [data, setData] = useState<AccountStat[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/history/${id}?start=${start}&end=${end}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as DayHistory[])
+          .then((hist: DayHistory[]) => ({
+            accountId: id,
+            profit: hist.reduce((s, h) => s + h.profit, 0),
+            trades: hist.reduce((s, h) => s + h.trades, 0),
+          }))
+      )
+    ).then((d) => { if (alive) setData(d); });
+    return () => { alive = false; };
+  }, [start, end]);
+
+  return data;
+}
+
+interface SymbolStat {
+  symbol: string;
+  profit: number;
+  trades: number;
+}
+
+function useSymbolStats(accountId: number | "all", start: string, end: string) {
+  const [stats, setStats] = useState<SymbolStat[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/symbol_stats/${id}?start=${start}&end=${end}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as SymbolStat[])
+      )
+    ).then((results) => {
+      if (!alive) return;
+      const merged: Record<string, SymbolStat> = {};
+      results.flat().forEach((s: SymbolStat) => {
+        if (merged[s.symbol]) {
+          merged[s.symbol].profit += s.profit;
+          merged[s.symbol].trades += s.trades;
+        } else {
+          merged[s.symbol] = { ...s };
+        }
+      });
+      setStats(Object.values(merged).sort((a, b) => b.profit - a.profit));
+    });
+    return () => { alive = false; };
+  }, [accountId, start, end]);
+
+  return stats;
+}
+
+interface BalanceOp {
+  ticket: number;
+  time: string;
+  amount: number;
+  comment: string;
+}
+
+interface BalanceSummary {
+  deposits: number;
+  withdrawals: number;
+  net: number;
+}
+
+const EMPTY_SUMMARY: BalanceSummary = { deposits: 0, withdrawals: 0, net: 0 };
+
+function useBalanceData() {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [accountId, setAccountId] = useState<number | "all">("all");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [ops, setOps] = useState<(BalanceOp & { accountId: number })[]>([]);
+  const [summaries, setSummaries] = useState<Record<number, BalanceSummary>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/balance_summary/${id}`)
+          .then((r) => (r.ok ? r.json() : EMPTY_SUMMARY))
+          .catch(() => EMPTY_SUMMARY)
+          .then((s: BalanceSummary) => [id, s] as [number, BalanceSummary])
+      )
+    ).then((entries) => setSummaries(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/balance_ops/${id}?year=${year}&month=${month}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as BalanceOp[])
+          .then((list: BalanceOp[]) => list.map((o) => ({ ...o, accountId: id })))
+      )
+    ).then((results) => {
+      setOps(results.flat().sort((a, b) => a.time.localeCompare(b.time)));
+    });
+  }, [accountId, year, month]);
+
+  const prevMonth = () => {
+    if (month === 1) { setYear((y) => y - 1); setMonth(12); }
+    else setMonth((m) => m - 1);
+  };
+  const nextMonth = () => {
+    if (month === 12) { setYear((y) => y + 1); setMonth(1); }
+    else setMonth((m) => m + 1);
+  };
+  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+  const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
+
+  return {
+    year, month, accountId, setAccountId, accountLabels, ops, summaries,
+    prevMonth, nextMonth, goToday, isCurrentMonth, monthName,
+  };
+}
+
+function DepositWithdrawalPanel() {
+  const b = useBalanceData();
+
+  const activeAccounts = b.accountId === "all" ? ACCOUNT_IDS : [b.accountId];
+  const lifetimeDeposits = activeAccounts.reduce((s, id) => s + (b.summaries[id]?.deposits ?? 0), 0);
+  const lifetimeWithdrawals = activeAccounts.reduce((s, id) => s + (b.summaries[id]?.withdrawals ?? 0), 0);
+  const lifetimeNet = lifetimeDeposits + lifetimeWithdrawals;
+
+  const monthDeposits = b.ops.filter((o) => o.amount >= 0).reduce((s, o) => s + o.amount, 0);
+  const monthWithdrawals = b.ops.filter((o) => o.amount < 0).reduce((s, o) => s + o.amount, 0);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <Landmark className="h-4 w-4" />
+          เงินฝาก-ถอน
+        </div>
+        <select
+          value={b.accountId}
+          onChange={(e) => b.setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
+          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+        >
+          <option value="all">ทุกพอร์ต</option>
+          {ACCOUNT_IDS.map((id) => (
+            <option key={id} value={id}>{b.accountLabels[id] ?? `Account ${id}`}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><ArrowDownToLine className="h-3.5 w-3.5 text-emerald-400" /> ฝากทั้งหมด</div>
+          <div className="text-lg font-semibold mt-1 text-emerald-400">+{lifetimeDeposits.toFixed(2)}</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><ArrowUpFromLine className="h-3.5 w-3.5 text-red-400" /> ถอนทั้งหมด</div>
+          <div className="text-lg font-semibold mt-1 text-red-400">{lifetimeWithdrawals.toFixed(2)}</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg p-3">
+          <div className="flex items-center gap-1.5 text-xs text-zinc-400"><Equal className="h-3.5 w-3.5" /> สุทธิ</div>
+          <div className={`text-lg font-semibold mt-1 ${lifetimeNet >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {lifetimeNet >= 0 ? "+" : ""}{lifetimeNet.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <div className="flex items-center gap-2">
+          <button onClick={b.prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
+          <span className="text-sm font-medium min-w-32 text-center">{b.monthName}</span>
+          <button onClick={b.nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
+          {!b.isCurrentMonth && (
+            <button onClick={b.goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
+              <RotateCcw className="h-3.5 w-3.5" /> วันนี้
+            </button>
+          )}
+        </div>
+        <div className="text-xs text-zinc-400">
+          ฝาก <span className="text-emerald-400 font-medium">+{monthDeposits.toFixed(2)}</span>
+          {" · "}
+          ถอน <span className="text-red-400 font-medium">{monthWithdrawals.toFixed(2)}</span>
+        </div>
+      </div>
+
+      {b.ops.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-4 text-center">ไม่มีรายการฝาก-ถอนเดือนนี้</div>
+      ) : (
+        <div className="max-h-56 overflow-y-auto space-y-1">
+          {b.ops.map((o) => (
+            <div key={`${o.accountId}-${o.ticket}`} className="flex items-center gap-3 text-sm py-1.5 border-b border-zinc-800 last:border-0">
+              {o.amount >= 0 ? (
+                <ArrowDownToLine className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <ArrowUpFromLine className="h-3.5 w-3.5 text-red-400 shrink-0" />
+              )}
+              <span className="text-zinc-400 text-xs w-32 shrink-0">{o.time}</span>
+              {b.accountId === "all" && (
+                <span className="text-xs text-zinc-500 shrink-0">{b.accountLabels[o.accountId] ?? o.accountId}</span>
+              )}
+              <span className="text-zinc-500 text-xs truncate flex-1">{o.comment}</span>
+              <span className={`font-medium shrink-0 ${o.amount >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {o.amount >= 0 ? "+" : ""}{o.amount.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function labelIndices(n: number) {
+  const step = Math.max(1, Math.ceil(n / 6));
+  return Array.from({ length: n }, (_, i) => i).filter((i) => i % step === 0 || i === n - 1);
+}
+
+function chartScales(cumulative: number[], slots: number) {
+  const W = 700, H = 170;
+  const padL = 44, padR = 12, padT = 14, padB = 22;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const cumMin = Math.min(0, ...cumulative);
+  const cumMax = Math.max(0, ...cumulative);
+  const range = cumMax - cumMin || 1;
+  const yFor = (v: number) => padT + plotH - ((v - cumMin) / range) * plotH;
+  const xFor = (i: number) => padL + (slots === 1 ? plotW / 2 : (plotW * i) / (slots - 1));
+
+  const ticks = [cumMax, (cumMax + cumMin) / 2, cumMin].filter((v, i, arr) => arr.indexOf(v) === i);
+  const xLabelIdx = labelIndices(slots);
+
+  return { W, H, padL, padR, yFor, xFor, ticks, xLabelIdx };
+}
+
+function PerformanceCharts() {
+  const m = useRangeHistory();
+  const symbolStats = useSymbolStats(m.accountId, m.start, m.end);
+  const accountStats = useAccountComparison(m.start, m.end);
+  return (
+    <div className="space-y-3">
+      <RangeFilter {...m} />
+      <PnLChart {...m} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <AccountComparisonChart stats={accountStats} accountLabels={m.accountLabels} />
+        <DrawdownChart {...m} />
+      </div>
+      <SymbolBreakdown stats={symbolStats} />
+    </div>
+  );
+}
+
+function AccountComparisonChart({ stats, accountLabels }: { stats: AccountStat[]; accountLabels: Record<number, string> }) {
+  const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
+  const barMaxH = 92;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 h-full flex flex-col">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+        <GitCompare className="h-4 w-4" />
+        เปรียบเทียบกำไรแต่ละพอร์ต
+      </div>
+      {stats.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-6 text-center flex-1 flex items-center justify-center">กำลังโหลด...</div>
+      ) : (
+        <div className="flex items-end justify-center gap-8 flex-1" style={{ minHeight: barMaxH + 48 }}>
+          {stats.map((s) => {
+            const h = Math.max((Math.abs(s.profit) / maxAbs) * barMaxH, 2);
+            const positive = s.profit >= 0;
+            return (
+              <div key={s.accountId} className="flex flex-col items-center gap-1 w-24">
+                <div className={`text-xs font-semibold ${positive ? "text-emerald-400" : "text-red-400"}`}>
+                  {positive ? "+" : ""}{s.profit.toFixed(2)}
+                </div>
+                <div className="w-full flex flex-col justify-end" style={{ height: barMaxH }}>
+                  <div
+                    className={`w-full rounded-t ${positive ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                    style={{ height: h }}
+                  />
+                </div>
+                <div className="text-xs text-zinc-400 text-center">
+                  {accountLabels[s.accountId] ?? `Account ${s.accountId}`}
+                </div>
+                <div className="text-xs text-zinc-500">{s.trades} trades</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SymbolBreakdown({ stats }: { stats: SymbolStat[] }) {
+  const maxAbs = Math.max(1, ...stats.map((s) => Math.abs(s.profit)));
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+        <BarChart3 className="h-4 w-4" />
+        กำไร/ขาดทุนแยกตาม Symbol
+      </div>
+      {stats.length === 0 ? (
+        <div className="text-zinc-500 text-sm py-4 text-center">ไม่มีข้อมูล</div>
+      ) : (
+        <div className="space-y-1.5">
+          {stats.map((s) => (
+            <div key={s.symbol} className="flex items-center gap-3">
+              <div className="w-24 text-sm font-medium text-zinc-300 shrink-0">{s.symbol}</div>
+              <div className="flex-1 h-4 bg-zinc-800 rounded overflow-hidden">
+                <div
+                  className={`h-full ${s.profit >= 0 ? "bg-emerald-500/70" : "bg-red-500/70"}`}
+                  style={{ width: `${(Math.abs(s.profit) / maxAbs) * 100}%` }}
+                />
+              </div>
+              <div className={`w-24 text-right text-sm font-semibold shrink-0 ${s.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {s.profit >= 0 ? "+" : ""}{s.profit.toFixed(2)}
+              </div>
+              <div className="w-16 text-right text-xs text-zinc-500 shrink-0">{s.trades} trades</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RangeFilter({
+  preset,
+  setPreset,
+  customStart,
+  setCustomStart,
+  customEnd,
+  setCustomEnd,
+  todayStr,
+  rangeLabel,
+}: ReturnType<typeof useRangeHistory>) {
+  const dateInputClass =
+    "w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-100 [color-scheme:dark]";
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-2.5">
+      <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <CalendarDays className="h-4 w-4" />
+          ช่วงเวลา
+        </div>
+        <div className="text-xs text-zinc-400 min-h-4">{rangeLabel}</div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {RANGE_PRESETS.map(({ key, label }) => {
+          const active = preset === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setPreset(key)}
+              aria-pressed={active}
+              className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                active
+                  ? "bg-emerald-600/20 border-emerald-500/60 text-emerald-300"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {preset === "custom" && (
+        <div className="grid grid-cols-2 gap-2 sm:max-w-md">
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            วันเริ่มต้น
+            <input
+              type="date"
+              value={customStart}
+              max={todayStr}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setCustomStart(v);
+                if (v > customEnd) setCustomEnd(v);
+              }}
+              className={dateInputClass}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            วันสิ้นสุด
+            <input
+              type="date"
+              value={customEnd}
+              min={customStart}
+              max={todayStr}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                setCustomEnd(v);
+                if (v < customStart) setCustomStart(v);
+              }}
+              className={dateInputClass}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PnLChart({
+  axisLabels,
+  slots,
+  fullDates,
+  cumulative,
+  daily,
+  hasData,
+  loading,
+  accountId,
+  setAccountId,
+  accountLabels,
+}: ReturnType<typeof useRangeHistory>) {
+  const rangeTotal = cumulative[cumulative.length - 1] ?? 0;
+  const { W, H, padL, padR, yFor, xFor, ticks, xLabelIdx } = chartScales(cumulative, slots);
+  const zeroY = yFor(0);
+  const color = rangeTotal >= 0 ? "#34d399" : "#f87171";
+
+  const linePoints = cumulative.map((v, i) => [xFor(i), yFor(v)] as const);
+  const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const areaPath = linePoints.length
+    ? `M${linePoints[0][0]},${zeroY} ` +
+      linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+      ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`
+    : "";
+  const showDots = linePoints.length <= 62;
+
+  const gradId = `pnlGrad-${accountId}`;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-medium flex items-center gap-1.5">
+            {rangeTotal >= 0 ? (
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <TrendingDown className="h-4 w-4 text-red-400" />
+            )}
+            กำไรสะสม
+          </div>
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            <option value="all">ทุกพอร์ต</option>
+            {ACCOUNT_IDS.map((id) => (
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
+            ))}
+          </select>
+        </div>
+        <div className={`text-lg font-semibold ${rangeTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+          {rangeTotal >= 0 ? "+" : ""}{rangeTotal.toFixed(2)} USD
+        </div>
+      </div>
+      {loading ? (
+        <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : !hasData ? (
+        <div className="h-[170px] flex items-center justify-center text-zinc-500 text-sm">ไม่มีข้อมูลในช่วงเวลานี้</div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[170px]">
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={padL} y1={yFor(t)} x2={W - padR} y2={yFor(t)} stroke="#27272a" strokeWidth={1} />
+              <text x={padL - 8} y={yFor(t)} dy={3} textAnchor="end" fontSize={10} fill="#71717a">
+                {t.toFixed(0)}
+              </text>
+            </g>
+          ))}
+
+          {xLabelIdx.map((i) => (
+            <text key={i} x={xFor(i)} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {axisLabels[i]}
+            </text>
+          ))}
+
+          <path d={areaPath} fill={`url(#${gradId})`} />
+          <path d={linePath} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {linePoints.map(([x, y], i) => (
+            <g key={i}>
+              {showDots && <circle cx={x} cy={y} r={2.5} fill={color} />}
+              <circle cx={x} cy={y} r={showDots ? 8 : 4} fill="transparent">
+                <title>{`${fullDates[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (รายวัน ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
+              </circle>
+            </g>
+          ))}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+function DrawdownChart({
+  axisLabels,
+  slots,
+  fullDates,
+  cumulative,
+  hasData,
+  loading,
+  accountId,
+  accountLabels,
+}: ReturnType<typeof useRangeHistory>) {
+  let peak = 0;
+  const drawdown = cumulative.map((v) => {
+    peak = Math.max(peak, v);
+    return v - peak;
+  });
+  const maxDrawdown = Math.min(0, ...drawdown);
+
+  const W = 460, H = 140;
+  const padL = 44, padR = 12, padT = 12, padB = 22;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const ddRange = Math.max(1, -maxDrawdown);
+  const yFor = (v: number) => padT + (-v / ddRange) * plotH;
+  const xFor = (i: number) => padL + (slots === 1 ? plotW / 2 : (plotW * i) / (slots - 1));
+  const zeroY = yFor(0);
+
+  const xLabelIdx = labelIndices(slots);
+  const ticks = [0, maxDrawdown / 2, maxDrawdown].filter((v, i, arr) => arr.indexOf(v) === i);
+
+  const linePoints = drawdown.map((v, i) => [xFor(i), yFor(v)] as const);
+  const linePath = linePoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const areaPath = linePoints.length
+    ? `M${linePoints[0][0]},${zeroY} ` +
+      linePoints.map(([x, y]) => `L${x},${y}`).join(" ") +
+      ` L${linePoints[linePoints.length - 1][0]},${zeroY} Z`
+    : "";
+  const showDots = linePoints.length <= 62;
+
+  const gradId = `ddGrad-${accountId}`;
+  const currentLabel = accountId === "all" ? "ทุกพอร์ต" : accountLabels[accountId] ?? `Account ${accountId}`;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <Waves className="h-4 w-4 text-red-400" />
+          Drawdown
+          <span className="text-xs text-zinc-500 font-normal">({currentLabel})</span>
+        </div>
+        <div className="text-sm font-semibold text-red-400">
+          {maxDrawdown.toFixed(2)} USD
+        </div>
+      </div>
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm" style={{ minHeight: 140 }}>กำลังโหลด...</div>
+      ) : !hasData ? (
+        <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm" style={{ minHeight: 140 }}>ไม่มีข้อมูลในช่วงเวลานี้</div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" style={{ minHeight: 140 }}>
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f87171" stopOpacity={0} />
+              <stop offset="100%" stopColor="#f87171" stopOpacity={0.45} />
+            </linearGradient>
+          </defs>
+
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={padL} y1={yFor(t)} x2={W - padR} y2={yFor(t)} stroke="#27272a" strokeWidth={1} />
+              <text x={padL - 8} y={yFor(t)} dy={3} textAnchor="end" fontSize={10} fill="#71717a">
+                {t.toFixed(0)}
+              </text>
+            </g>
+          ))}
+
+          {xLabelIdx.map((i) => (
+            <text key={i} x={xFor(i)} y={H - 6} textAnchor="middle" fontSize={10} fill="#71717a">
+              {axisLabels[i]}
+            </text>
+          ))}
+
+          <path d={areaPath} fill={`url(#${gradId})`} />
+          <path d={linePath} fill="none" stroke="#f87171" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {linePoints.map(([x, y], i) => (
+            <g key={i}>
+              {showDots && <circle cx={x} cy={y} r={2} fill="#f87171" />}
+              <circle cx={x} cy={y} r={showDots ? 8 : 4} fill="transparent">
+                <title>{`${fullDates[i]}: drawdown ${drawdown[i].toFixed(2)} USD`}</title>
+              </circle>
+            </g>
+          ))}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub, accent, icon: Icon }: { label: string; value: string; sub: string; accent?: "green" | "red"; icon?: React.ComponentType<{ className?: string }> }) {
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+        {Icon && <Icon className="h-3.5 w-3.5" />}
+        {label}
+      </div>
+      <div className={`text-2xl font-semibold mt-1 ${accent === "green" ? "text-emerald-400" : accent === "red" ? "text-red-400" : ""}`}>{value}</div>
+      <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>
+    </div>
+  );
+}
+
+// ─── Calendar Tab ─────────────────────────────────────────────────────────────
+
+interface TradeRecord {
+  ticket: number;
+  symbol: string;
+  type: "BUY" | "SELL";
+  volume: number;
+  open_time: string | null;
+  open_price: number | null;
+  close_time: string;
+  close_price: number;
+  profit: number;
+}
+
+export function CalendarTab() {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [accountId, setAccountId] = useState<number | "all">("all");
+  const [history, setHistory] = useState<DayHistory[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [trades, setTrades] = useState<(TradeRecord & { accountId: number })[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/history/${id}?year=${year}&month=${month}`)
+          .then((r) => r.json())
+          .catch(() => [] as DayHistory[])
+      )
+    ).then((results) => {
+      const merged: Record<string, DayHistory> = {};
+      results.flat().forEach((h: DayHistory) => {
+        if (merged[h.date]) {
+          merged[h.date].profit += h.profit;
+          merged[h.date].trades += h.trades;
+        } else {
+          merged[h.date] = { ...h };
+        }
+      });
+      setHistory(Object.values(merged));
+    }).finally(() => setLoading(false));
+  }, [accountId, year, month]);
+
+  useEffect(() => {
+    setSelectedDay(null);
+  }, [accountId, year, month]);
+
+  useEffect(() => {
+    if (selectedDay === null) return;
+    setTradesLoading(true);
+    const ids = accountId === "all" ? ACCOUNT_IDS : [accountId];
+    Promise.all(
+      ids.map((id) =>
+        apiFetch(`/api/trades/${id}?year=${year}&month=${month}&day=${selectedDay}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [] as TradeRecord[])
+          .then((list: TradeRecord[]) => list.map((t) => ({ ...t, accountId: id })))
+      )
+    ).then((results) => {
+      setTrades(results.flat().sort((a, b) => a.close_time.localeCompare(b.close_time)));
+    }).finally(() => setTradesLoading(false));
+  }, [selectedDay, accountId, year, month]);
+
+  const byDay: Record<string, DayHistory> = {};
+  history.forEach((h) => (byDay[h.date] = h));
+
+  const monthProfit = history.reduce((s, h) => s + h.profit, 0);
+  const tradeCount = history.reduce((s, h) => s + h.trades, 0);
+  const winDays = history.filter((h) => h.profit > 0).length;
+  const loseDays = history.filter((h) => h.profit < 0).length;
+
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const prevMonth = () => {
+    if (month === 1) { setYear(y => y - 1); setMonth(12); }
+    else setMonth(m => m - 1);
+  };
+  const nextMonth = () => {
+    if (month === 12) { setYear(y => y + 1); setMonth(1); }
+    else setMonth(m => m + 1);
+  };
+  const goToday = () => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); };
+
+  const monthName = new Date(year, month - 1).toLocaleString("th-TH", { month: "long", year: "numeric" });
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value === "all" ? "all" : Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm"
+          >
+            <option value="all">ทุกพอร์ต</option>
+            {ACCOUNT_IDS.map((id) => (
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={prevMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
+          <span className="text-sm font-medium min-w-36 text-center">{monthName}</span>
+          <button onClick={nextMonth} className="p-1.5 rounded hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
+          {!isCurrentMonth && (
+            <button onClick={goToday} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200">
+              <RotateCcw className="h-3.5 w-3.5" /> วันนี้
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            {monthProfit >= 0 ? <TrendingUp className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" /> : <TrendingDown className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />}
+            <span className="truncate">กำไรเดือนนี้</span>
+          </div>
+          <div className={`text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1 truncate ${monthProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            <span className="sm:hidden">{monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(0)}</span>
+            <span className="hidden sm:inline">{monthProfit >= 0 ? "+" : ""}{monthProfit.toFixed(2)} USD</span>
+          </div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            <Repeat className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />
+            <span className="sm:hidden truncate">Trades</span>
+            <span className="hidden sm:inline truncate">จำนวน Trades</span>
+          </div>
+          <div className="text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1">{tradeCount}</div>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2 sm:p-3 overflow-hidden">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs text-zinc-400 whitespace-nowrap">
+            <Target className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" />
+            <span className="sm:hidden truncate">กำไร/ขาดทุน</span>
+            <span className="hidden sm:inline truncate">วันกำไร / วันขาดทุน</span>
+          </div>
+          <div className="text-sm sm:text-xl font-semibold mt-0.5 sm:mt-1">
+            <span className="text-emerald-400">{winDays}</span>
+            <span className="text-zinc-500"> / </span>
+            <span className="text-red-400">{loseDays}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+        <div className="grid grid-cols-7 gap-1.5 mb-1.5">
+          {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d) => (
+            <div key={d} className="text-center text-xs text-zinc-500 py-1">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1.5">
+          {Array.from({ length: firstDay }).map((_, i) => (
+            <div key={`e${i}`} className="min-h-16" />
+          ))}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1;
+            const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+            const data = byDay[dateKey];
+            const isToday = dateKey === new Date().toISOString().split("T")[0];
+            const isSelected = selectedDay === day;
+            return (
+              <button
+                key={day}
+                onClick={() => setSelectedDay(isSelected ? null : day)}
+                className={`min-h-16 p-1 sm:p-1.5 rounded-lg text-left transition-colors hover:bg-zinc-800 overflow-hidden ${
+                  isSelected ? "ring-2 ring-emerald-500" : ""
+                } ${
+                  data
+                    ? data.profit > 0
+                      ? "bg-emerald-950/40"
+                      : "bg-red-950/40"
+                    : "bg-zinc-800/40"
+                }`}
+              >
+                <div className={`text-[10px] sm:text-xs font-medium ${isToday ? "text-emerald-400" : "text-zinc-400"}`}>{day}</div>
+                {data && (
+                  <div className="mt-0.5 sm:mt-1 w-full">
+                    <div className={`text-[9px] sm:text-xs font-semibold truncate ${data.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      <span className="sm:hidden">{data.profit >= 0 ? "+" : ""}{data.profit.toFixed(0)}</span>
+                      <span className="hidden sm:inline">{data.profit >= 0 ? "+" : ""}{data.profit.toFixed(2)}</span>
+                    </div>
+                    <div className="text-zinc-500 text-[9px] sm:text-xs truncate flex items-center gap-0.5">
+                      <Repeat className="h-2.5 w-2.5 sm:hidden" />
+                      <span className="sm:hidden">{data.trades}</span>
+                      <span className="hidden sm:inline">{data.trades} trades</span>
+                    </div>
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {loading && <div className="text-center text-zinc-500 text-sm py-2">Loading...</div>}
+
+      {selectedDay !== null && (
+        <DayTradesPanel
+          year={year}
+          month={month}
+          day={selectedDay}
+          trades={trades}
+          loading={tradesLoading}
+          accountId={accountId}
+          accountLabels={accountLabels}
+          onClose={() => setSelectedDay(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DayTradesPanel({
+  year,
+  month,
+  day,
+  trades,
+  loading,
+  accountId,
+  accountLabels,
+  onClose,
+}: {
+  year: number;
+  month: number;
+  day: number;
+  trades: (TradeRecord & { accountId: number })[];
+  loading: boolean;
+  accountId: number | "all";
+  accountLabels: Record<number, string>;
+  onClose: () => void;
+}) {
+  const dateLabel = new Date(year, month - 1, day).toLocaleString("th-TH", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const dayTotal = trades.reduce((s, t) => s + t.profit, 0);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <div className="text-sm font-medium flex items-center gap-2">
+          <History className="h-4 w-4" />
+          {dateLabel}
+        </div>
+        <div className="flex items-center gap-3">
+          {trades.length > 0 && (
+            <span className={`text-sm font-semibold ${dayTotal >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+              {dayTotal >= 0 ? "+" : ""}{dayTotal.toFixed(2)} USD
+            </span>
+          )}
+          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-zinc-500 text-sm py-6">กำลังโหลด...</div>
+      ) : trades.length === 0 ? (
+        <div className="text-center text-zinc-500 text-sm py-6">ไม่มีรายการเทรดวันนี้</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-zinc-400 text-left">
+                <th className="px-4 py-2">Ticket</th>
+                {accountId === "all" && <th className="px-4 py-2">พอร์ต</th>}
+                <th className="px-4 py-2">Symbol</th>
+                <th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2">Volume</th>
+                <th className="px-4 py-2">เปิด</th>
+                <th className="px-4 py-2">ปิด</th>
+                <th className="px-4 py-2">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((t) => (
+                <tr key={`${t.accountId}-${t.ticket}`} className="border-t border-zinc-800">
+                  <td className="px-4 py-2 text-zinc-300">{t.ticket}</td>
+                  {accountId === "all" && (
+                    <td className="px-4 py-2 text-zinc-400 text-xs">{accountLabels[t.accountId] ?? t.accountId}</td>
+                  )}
+                  <td className="px-4 py-2 font-medium text-zinc-200">{t.symbol}</td>
+                  <td className={`px-4 py-2 font-medium flex items-center gap-1 ${t.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>
+                    {t.type === "BUY" ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+                    {t.type}
+                  </td>
+                  <td className="px-4 py-2">{t.volume}</td>
+                  <td className="px-4 py-2 text-xs text-zinc-400">
+                    {t.open_time ? (
+                      <>
+                        <div>{t.open_time.slice(11, 16)}</div>
+                        <div className="text-zinc-500">{t.open_price}</div>
+                      </>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-xs text-zinc-400">
+                    <div>{t.close_time.slice(11, 16)}</div>
+                    <div className="text-zinc-500">{t.close_price}</div>
+                  </td>
+                  <td className={`px-4 py-2 font-medium ${t.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {t.profit >= 0 ? "+" : ""}{t.profit.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Positions Tab ────────────────────────────────────────────────────────────
+
+export function PositionsTab() {
+  return (
+    <div className="space-y-8">
+      <EaSignalDashboard />
+      <LiveChartCard />
+      {ACCOUNT_IDS.map((id) => (
+        <AccountPanel key={id} accountId={id} label={`Account ${id}`} />
+      ))}
+    </div>
+  );
+}
+
+interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] as const;
+
+const TIMEFRAME_SECONDS: Record<(typeof TIMEFRAMES)[number], number> = {
+  M1: 60, M5: 300, M15: 900, M30: 1800,
+  H1: 3600, H4: 14400, D1: 86400, W1: 604800, MN1: 2592000,
+};
+
+interface Tick {
+  time: number;
+  bid: number;
+  ask: number;
+}
+
+function useTick(accountId: number, symbol: string) {
+  const [tick, setTick] = useState<Tick | null>(null);
+
+  useEffect(() => {
+    if (!symbol) { setTick(null); return; }
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/tick/${accountId}?symbol=${encodeURIComponent(symbol)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: Tick | null) => { if (alive) setTick(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId, symbol]);
+
+  return tick;
+}
+
+function useCandles(accountId: number, symbol: string, timeframe: string) {
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!symbol) return;
+    setLoading(true);
+    apiFetch(`/api/candles/${accountId}?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&count=150`)
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [] as Candle[])
+      .then((data: Candle[]) => setCandles(data))
+      .finally(() => setLoading(false));
+  }, [accountId, symbol, timeframe]);
+
+  return { candles, loading };
+}
+
+function useAccountPositions(accountId: number) {
+  const [positions, setPositions] = useState<Position[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/positions/${accountId}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d: Position[]) => { if (alive) setPositions(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId]);
+
+  return positions;
+}
+
+function useAccountOrders(accountId: number) {
+  const [orders, setOrders] = useState<PendingOrder[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchData = () => {
+      apiFetch(`/api/orders/${accountId}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d: PendingOrder[]) => { if (alive) setOrders(d); })
+        .catch(() => {});
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId]);
+
+  return orders;
+}
+
+// Price-line titles sit on top of the candles, so keep them short: the order type
+// abbreviated and only the last 4 digits of the ticket.
+const ORDER_TYPE_SHORT: Record<string, string> = {
+  "BUY LIMIT": "B.LMT",
+  "SELL LIMIT": "S.LMT",
+  "BUY STOP": "B.STOP",
+  "SELL STOP": "S.STOP",
+  "BUY STOP LIMIT": "B.STL",
+  "SELL STOP LIMIT": "S.STL",
+};
+const shortTicket = (ticket: number) => String(ticket).slice(-4);
+
+function LightweightCandleChart({
+  candles,
+  positions,
+  orders,
+  tick,
+  timeframe,
+  height,
+}: {
+  candles: Candle[];
+  positions: Position[];
+  orders: PendingOrder[];
+  tick: Tick | null;
+  timeframe: (typeof TIMEFRAMES)[number];
+  height: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
+  const lastCandleRef = useRef<Candle | null>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const hoveringRef = useRef(false);
+
+  const renderLegend = (c: { open: number; high: number; low: number; close: number } | null) => {
+    if (!legendRef.current) return;
+    if (!c) { legendRef.current.innerHTML = ""; return; }
+    const color = c.close >= c.open ? "#34d399" : "#f87171";
+    legendRef.current.innerHTML = [
+      ["O", c.open], ["H", c.high], ["L", c.low], ["C", c.close],
+    ].map(([label, value]) =>
+      `<span style="color:#71717a">${label}</span> <span style="color:${color}">${(value as number).toFixed(2)}</span>`
+    ).join(" &nbsp; ");
+  };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      height,
+      layout: { background: { color: "transparent" }, textColor: "#a1a1aa", fontSize: 10 },
+      grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: "#3f3f46" },
+      rightPriceScale: { borderColor: "#3f3f46" },
+    });
+    const series = chart.addCandlestickSeries({
+      upColor: "#34d399",
+      downColor: "#f87171",
+      borderVisible: false,
+      wickUpColor: "#34d399",
+      wickDownColor: "#f87171",
+    });
+    chartRef.current = chart;
+    seriesRef.current = series;
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!seriesRef.current) return;
+      if (!param.point || !param.time) {
+        hoveringRef.current = false;
+        renderLegend(lastCandleRef.current);
+        return;
+      }
+      hoveringRef.current = true;
+      const data = param.seriesData.get(seriesRef.current) as { open: number; high: number; low: number; close: number } | undefined;
+      renderLegend(data ?? lastCandleRef.current);
+    });
+
+    const resize = () => {
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(containerRef.current);
+
+    return () => {
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.applyOptions({ height });
+  }, [height]);
+
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.setData(
+      candles.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }))
+    );
+    lastCandleRef.current = candles.length > 0 ? candles[candles.length - 1] : null;
+    hoveringRef.current = false;
+    renderLegend(lastCandleRef.current);
+    chartRef.current?.timeScale().fitContent();
+  }, [candles]);
+
+  useEffect(() => {
+    if (!seriesRef.current || !tick) return;
+    const stepSeconds = TIMEFRAME_SECONDS[timeframe];
+    const bucketTime = Math.floor(tick.time / stepSeconds) * stepSeconds;
+    const price = tick.bid;
+    const prev = lastCandleRef.current;
+
+    let next: Candle;
+    if (prev && bucketTime === prev.time) {
+      next = { ...prev, high: Math.max(prev.high, price), low: Math.min(prev.low, price), close: price };
+    } else if (!prev || bucketTime > prev.time) {
+      next = { time: bucketTime, open: price, high: price, low: price, close: price };
+    } else {
+      return;
+    }
+    lastCandleRef.current = next;
+    seriesRef.current.update({ time: next.time as UTCTimestamp, open: next.open, high: next.high, low: next.low, close: next.close });
+    if (!hoveringRef.current) renderLegend(next);
+  }, [tick, timeframe]);
+
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    priceLinesRef.current.forEach((l) => seriesRef.current!.removePriceLine(l));
+    priceLinesRef.current = [];
+    positions.forEach((p) => {
+      const color = p.type === "BUY" ? "#34d399" : "#f87171";
+      priceLinesRef.current.push(
+        seriesRef.current!.createPriceLine({ price: p.price_open, color, lineWidth: 1, lineStyle: LineStyle.LargeDashed, title: `${p.type} ${shortTicket(p.ticket)}` })
+      );
+      if (p.sl > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: p.sl, color: "#f87171", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "SL" })
+        );
+      }
+      if (p.tp > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: p.tp, color: "#34d399", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "TP" })
+        );
+      }
+    });
+    orders.forEach((o) => {
+      priceLinesRef.current.push(
+        seriesRef.current!.createPriceLine({ price: o.price_open, color: "#fbbf24", lineWidth: 1, lineStyle: LineStyle.Dashed, title: `${ORDER_TYPE_SHORT[o.type] ?? o.type} ${shortTicket(o.ticket)}` })
+      );
+      if (o.sl > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: o.sl, color: "#f87171", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "SL" })
+        );
+      }
+      if (o.tp > 0) {
+        priceLinesRef.current.push(
+          seriesRef.current!.createPriceLine({ price: o.tp, color: "#34d399", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "TP" })
+        );
+      }
+    });
+  }, [positions, orders]);
+
+  return (
+    <div className="relative w-full" data-no-pull-refresh>
+      <div ref={legendRef} className="absolute top-2 left-2 z-50 text-[11px] font-mono pointer-events-none bg-zinc-800/90 border border-zinc-600 rounded px-2 py-1" />
+      <div ref={containerRef} className="w-full" />
+    </div>
+  );
+}
+
+interface EaSignal {
+  symbol: string;
+  signal: "BUY" | "SELL" | "WAIT";
+  h4_close: number;
+  ema_fast: number;
+  ema_slow: number;
+  adx: number | null;
+  adx_now: number | null;
+  adx_min: number;
+  price_vs_fast: "above" | "below" | "equal";
+  fast_vs_slow: "above" | "below" | "equal";
+  adx_ok: boolean;
+  decided_at: number;
+  next_check: number;
+  price_now?: number | null;
+  flip?: { buy_above: number; sell_below: number; cross_price: number };
+  rule: { ema_fast: number; ema_slow: number; adx_period: number; adx_min: number };
+}
+
+function useEaSignal(accountId: number, symbol: string | undefined) {
+  const [signal, setSignal] = useState<EaSignal | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const query = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    const fetchData = () => {
+      apiFetch(`/api/ea_signal/${accountId}${query}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad response"))))
+        .then((d: EaSignal) => { if (alive) { setSignal(d); setFailed(false); } })
+        .catch(() => { if (alive) setFailed(true); });
+    };
+    fetchData();
+    // The EA only re-decides when an H4 bar closes; ADX moves hourly. A minute is plenty.
+    const interval = setInterval(fetchData, 60000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [accountId, symbol]);
+
+  return { signal, failed };
+}
+
+// MT5 candle times are server time stored as epoch, so reading them as UTC shows server time.
+function formatServerTime(t: number) {
+  return new Date(t * 1000).toLocaleString("th-TH", {
+    timeZone: "UTC", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
+function EaSignalCard({ accountId, label }: { accountId: number; label: string }) {
+  const positions = useAccountPositions(accountId);
+  const orders = useAccountOrders(accountId);
+  const symbol = positions[0]?.symbol ?? orders[0]?.symbol;
+  const { signal, failed } = useEaSignal(accountId, symbol);
+
+  const buys = positions.filter((p) => p.type === "BUY");
+  const sells = positions.filter((p) => p.type === "SELL");
+  const sumVolume = (list: Position[]) => list.reduce((s, p) => s + p.volume, 0);
+  const pendingBuy = orders.filter((o) => o.type.startsWith("BUY")).length;
+  const pendingSell = orders.filter((o) => o.type.startsWith("SELL")).length;
+
+  let sideText: string;
+  let sideClass: string;
+  if (buys.length > 0 && sells.length > 0) {
+    sideText = "BUY + SELL"; sideClass = "bg-amber-900/50 text-amber-300";
+  } else if (buys.length > 0) {
+    sideText = "BUY"; sideClass = "bg-emerald-900/50 text-emerald-300";
+  } else if (sells.length > 0) {
+    sideText = "SELL"; sideClass = "bg-red-900/50 text-red-300";
+  } else if (pendingBuy > 0 && pendingSell === 0) {
+    sideText = "รอเข้า BUY"; sideClass = "bg-emerald-900/30 text-emerald-300";
+  } else if (pendingSell > 0 && pendingBuy === 0) {
+    sideText = "รอเข้า SELL"; sideClass = "bg-red-900/30 text-red-300";
+  } else if (pendingBuy > 0 && pendingSell > 0) {
+    sideText = "รอเข้า BUY + SELL"; sideClass = "bg-amber-900/30 text-amber-300";
+  } else {
+    sideText = "ไม่มีไม้"; sideClass = "bg-zinc-800 text-zinc-400";
+  }
+
+  const signalText = !signal ? "" : signal.signal === "BUY" ? "BUY อย่างเดียว" : signal.signal === "SELL" ? "SELL อย่างเดียว" : "no trend – waiting";
+  const signalClass = !signal
+    ? "bg-zinc-800 text-zinc-400"
+    : signal.signal === "BUY" ? "bg-emerald-900/50 text-emerald-300"
+    : signal.signal === "SELL" ? "bg-red-900/50 text-red-300"
+    : "bg-zinc-800 text-zinc-300";
+
+  let note: string | null = null;
+  if (signal) {
+    const oppositeOpen = signal.signal === "BUY" ? sells.length : signal.signal === "SELL" ? buys.length : 0;
+    if (oppositeOpen > 0) {
+      note = `สัญญาณเป็น ${signal.signal} แต่ยังมีไม้ฝั่งตรงข้ามค้าง ${oppositeOpen} ไม้ — EA หยุดเปิดไม้ฝั่งเก่า รอปิดหมดก่อนเริ่มฝั่งใหม่`;
+    } else if (signal.signal === "WAIT") {
+      note = "ไม่มีเทรนด์ชัดเจน — EA รอ ไม่เปิดไม้ใหม่";
+    }
+  }
+
+  // What the next H4 close must do to change the side (EA only re-decides at H4 close).
+  const flipRows: { to: "BUY" | "SELL" | "no trend"; cond: string; target: number | null }[] = [];
+  if (signal?.flip) {
+    const { buy_above, sell_below } = signal.flip;
+    const adxMin = signal.adx_min;
+    if (signal.signal === "SELL") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดเหนือ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+    } else if (signal.signal === "BUY") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดใต้ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    } else {
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    }
+  }
+  const flipToClass = (to: string) =>
+    to === "BUY" ? "text-emerald-400" : to === "SELL" ? "text-red-400" : "text-zinc-300";
+
+  const relation = (r: "above" | "below" | "equal") => (r === "above" ? ">" : r === "below" ? "<" : "=");
+  const relationColor = (r: "above" | "below" | "equal") =>
+    r === "above" ? "text-emerald-400" : r === "below" ? "text-red-400" : "text-zinc-400";
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate">{label}</div>
+          <div className="text-xs text-zinc-500">{signal?.symbol ?? symbol ?? ""}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[11px] text-zinc-500 mb-0.5">กำลังเล่น</div>
+          <span className={`inline-block text-xs font-semibold px-2 py-1 rounded-full ${sideClass}`}>{sideText}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">BUY</div>
+          <div className="font-medium text-emerald-400">{buys.length} ไม้ · {sumVolume(buys).toFixed(2)} lot</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">SELL</div>
+          <div className="font-medium text-red-400">{sells.length} ไม้ · {sumVolume(sells).toFixed(2)} lot</div>
+        </div>
+        <div className="bg-zinc-800/50 rounded-lg px-2.5 py-2">
+          <div className="text-zinc-500">Pending</div>
+          <div className="font-medium text-amber-300">{orders.length} order</div>
+        </div>
+      </div>
+
+      <div className="border-t border-zinc-800 pt-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+            <Bot className="h-3.5 w-3.5" /> สัญญาณจากตัวกรอง
+          </div>
+          {signal && <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${signalClass}`}>{signalText}</span>}
+        </div>
+
+        {!signal ? (
+          <div className="text-xs text-zinc-500 py-1">{failed ? "ดึงค่า indicator ไม่ได้" : "กำลังโหลด..."}</div>
+        ) : (
+          <>
+            <div className="space-y-1.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">H4 Close vs EMA{signal.rule.ema_fast}</span>
+                <span className={`font-mono ${relationColor(signal.price_vs_fast)}`}>
+                  {signal.h4_close.toFixed(2)} {relation(signal.price_vs_fast)} {signal.ema_fast.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">EMA{signal.rule.ema_fast} vs EMA{signal.rule.ema_slow} (H4)</span>
+                <span className={`font-mono ${relationColor(signal.fast_vs_slow)}`}>
+                  {signal.ema_fast.toFixed(2)} {relation(signal.fast_vs_slow)} {signal.ema_slow.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-zinc-400">ADX({signal.rule.adx_period}) H1 ≥ {signal.adx_min}</span>
+                <span className={`font-mono flex items-center gap-1 ${signal.adx_ok ? "text-emerald-400" : "text-red-400"}`}>
+                  {signal.adx_ok ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                  {signal.adx !== null ? signal.adx.toFixed(1) : "—"}
+                </span>
+              </div>
+            </div>
+
+            {flipRows.length > 0 && (
+              <div className="border-t border-zinc-800 pt-2.5 space-y-1.5">
+                <div className="text-xs text-zinc-400">
+                  จะเปลี่ยนหน้าเล่นเมื่อ <span className="text-zinc-300">แท่ง H4 ปิดรอบถัดไป ({formatServerTime(signal.next_check)})</span>
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {flipRows.map((row) => (
+                    <div key={row.to} className="flex items-start gap-2">
+                      <span className={`shrink-0 w-16 font-semibold ${flipToClass(row.to)}`}>→ {row.to}</span>
+                      <span className="text-zinc-300">
+                        {row.cond}
+                        {signal.price_now != null && row.target !== null && (
+                          <span className="text-zinc-500">
+                            {" "}(ห่างจากราคาตอนนี้ {Math.abs(row.target - signal.price_now).toFixed(2)})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] text-zinc-500">
+                  {signal.price_now != null && `ราคาตอนนี้ ${signal.price_now.toFixed(2)} · `}
+                  ADX ต้องห่างจาก {signal.adx_min} อีก {signal.adx !== null ? Math.abs(signal.adx - signal.adx_min).toFixed(1) : "—"} จุด · ระหว่างรอบ EA ไม่เปลี่ยนฝั่ง
+                </div>
+              </div>
+            )}
+
+            {note && (
+              <div className="text-xs rounded-lg bg-zinc-800/60 border border-zinc-700 px-2.5 py-2 text-zinc-300">{note}</div>
+            )}
+
+            <div className="text-[11px] text-zinc-500 space-y-0.5">
+              <div>
+                ตัดสินเมื่อ {formatServerTime(signal.decided_at)} · เช็กถัดไป {formatServerTime(signal.next_check)} (เวลาเซิร์ฟเวอร์)
+              </div>
+              <div>
+                ADX ตอนนี้ {signal.adx_now !== null ? signal.adx_now.toFixed(1) : "—"} · ค่าประมาณจากแท่งเทียน MT5 ไม่ใช่ค่าที่ EA อ่านจริง
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EaSignalDashboard() {
+  const [labels, setLabels] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setLabels(Object.fromEntries(entries)));
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium flex items-center gap-1.5">
+        <Bot className="h-4 w-4" /> EA Dashboard
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {ACCOUNT_IDS.map((id) => (
+          <EaSignalCard key={id} accountId={id} label={labels[id] ?? `Account ${id}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Shown in the chart picker even when the account has nothing open (matches the backend EA default).
+const DEFAULT_CHART_SYMBOL = "XAUUSDm";
+
+const CHART_MIN_HEIGHT = 200;
+const CHART_MAX_HEIGHT = 700;
+
+function LiveChartCard() {
+  const [accountId, setAccountId] = useState<number>(ACCOUNT_IDS[0]);
+  const [symbol, setSymbol] = useState("");
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("M15");
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [chartHeight, setChartHeight] = useState(320);
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startY: e.clientY, startHeight: chartHeight };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const delta = e.clientY - dragRef.current.startY;
+    setChartHeight(Math.min(CHART_MAX_HEIGHT, Math.max(CHART_MIN_HEIGHT, dragRef.current.startHeight + delta)));
+  };
+  const onResizeEnd = () => { dragRef.current = null; };
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/positions/${id}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .then((d: Position[]) => [id, d.length] as [number, number])
+          .catch(() => [id, 0] as [number, number])
+      )
+    ).then((results) => {
+      const withOrders = results.find(([, count]) => count > 0)?.[0];
+      if (withOrders !== undefined) setAccountId(withOrders);
+    });
+  }, []);
+
+  useEffect(() => {
+    Promise.all(
+      ACCOUNT_IDS.map((id) =>
+        apiFetch(`/api/account/${id}`)
+          .then((r) => r.json())
+          .then((d) => [id, d.login ? `#${d.login}` : `Account ${id}`] as [number, string])
+          .catch(() => [id, `Account ${id}`] as [number, string])
+      )
+    ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
+  }, []);
+
+  const positions = useAccountPositions(accountId);
+  const orders = useAccountOrders(accountId);
+  // Symbols the account is trading come first; the default is always selectable so the
+  // chart works even when nothing is open.
+  const tradedSymbols = Array.from(new Set([...positions.map((p) => p.symbol), ...orders.map((o) => o.symbol)]));
+  const symbols = Array.from(new Set([...tradedSymbols, DEFAULT_CHART_SYMBOL]));
+  const [symbolPicked, setSymbolPicked] = useState(false);
+
+  useEffect(() => { setSymbolPicked(false); }, [accountId]);
+
+  useEffect(() => {
+    // Until the user picks one, follow what the account is actually trading.
+    if (!symbolPicked && tradedSymbols.length > 0) {
+      if (symbol !== tradedSymbols[0]) setSymbol(tradedSymbols[0]);
+      return;
+    }
+    if (!symbols.includes(symbol)) setSymbol(symbols[0]);
+  }, [symbols.join(","), tradedSymbols.join(","), symbol, symbolPicked]);
+
+  const { candles, loading } = useCandles(accountId, symbol, timeframe);
+  const tick = useTick(accountId, symbol);
+  const symbolPositions = positions.filter((p) => p.symbol === symbol);
+  const symbolOrders = orders.filter((o) => o.symbol === symbol);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+        <div className="text-sm font-medium flex items-center gap-1.5">
+          <CandlestickChart className="h-4 w-4" /> กราฟราคา
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(Number(e.target.value))}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {ACCOUNT_IDS.map((id) => (
+              <option key={id} value={id}>{accountLabels[id] ?? `Account ${id}`}</option>
+            ))}
+          </select>
+          <select
+            value={symbol}
+            onChange={(e) => { setSymbol(e.target.value); setSymbolPicked(true); }}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {symbols.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value as (typeof TIMEFRAMES)[number])}
+            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs"
+          >
+            {TIMEFRAMES.map((tf) => (
+              <option key={tf} value={tf}>{tf}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {loading || !symbol ? (
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">กำลังโหลด...</div>
+      ) : candles.length === 0 ? (
+        <div style={{ height: chartHeight }} className="flex items-center justify-center text-zinc-500 text-sm">ไม่มีข้อมูลแท่งเทียนของ {symbol}</div>
+      ) : (
+        <>
+          <LightweightCandleChart candles={candles} positions={symbolPositions} orders={symbolOrders} tick={tick} timeframe={timeframe} height={chartHeight} />
+          <div
+            onPointerDown={onResizeStart}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeEnd}
+            className="flex items-center justify-center h-3 -mt-0.5 cursor-ns-resize touch-none group"
+            data-no-pull-refresh
+          >
+            <div className="w-10 h-1 rounded-full bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
+          </div>
+          <div className="flex items-center gap-x-6 gap-y-1 mt-1 text-xs text-zinc-500 flex-wrap">
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-emerald-400" /> Entry (BUY)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t-2 border-dashed border-red-400" /> Entry (SELL)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t border-dashed border-amber-400" /> Pending Order</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-red-400" /> SL</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t border-dotted border-emerald-400" /> TP</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AccountPanel({ accountId, label }: { accountId: number; label: string }) {
+  const [account, setAccount] = useState<Account | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [orders, setOrders] = useState<PendingOrder[]>([]);
+  const [online, setOnline] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"all" | "profitable" | null>(null);
+  const [closing, setClosing] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [accRes, posRes, ordRes] = await Promise.all([
+          apiFetch(`/api/account/${accountId}`),
+          apiFetch(`/api/positions/${accountId}`),
+          apiFetch(`/api/orders/${accountId}`),
+        ]);
+        if (!accRes.ok || !posRes.ok) throw new Error("bad response");
+        setAccount(await accRes.json());
+        setPositions(await posRes.json());
+        setOrders(ordRes.ok ? await ordRes.json() : []);
+        setOnline(true);
+      } catch {
+        setOnline(false);
+      }
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
+    return () => clearInterval(interval);
+  }, [accountId]);
+
+  const handleClose = async () => {
+    if (!confirmAction) return;
+    setClosing(true);
+    try {
+      const endpoint = confirmAction === "all" ? "close_all" : "close_profitable";
+      await apiFetch(`/api/${endpoint}/${accountId}`, { method: "POST" });
+    } catch {}
+    finally {
+      setClosing(false);
+      setConfirmAction(null);
+    }
+  };
+
+  const floatingPnl = positions.reduce((s, p) => s + p.profit, 0);
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">{label}</h2>
+          {account && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-zinc-400">
+              <span>{account.company}</span>
+              <span>#{account.login} — {account.name}</span>
+              <span className={`font-medium ${account.trade_mode === "Demo" ? "text-yellow-400" : "text-emerald-400"}`}>{account.trade_mode}</span>
+              <span>{account.server}</span>
+            </div>
+          )}
+        </div>
+        <div className="mt-1">
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full ${
+              online ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300"
+            }`}
+          >
+            {online ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            {online ? "Connected" : "Offline"}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <SummaryCard label="Balance" value={account?.balance} currency={account?.currency} icon={Wallet} />
+        <SummaryCard label="Equity" value={account?.equity} currency={account?.currency} icon={Scale} />
+        <SummaryCard label="Free Margin" value={account?.free_margin} currency={account?.currency} icon={Landmark} />
+        <SummaryCard label="Margin Level" value={account?.margin_level} suffix="%" icon={Gauge} />
+      </div>
+
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+        <h3 className="px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center gap-2">
+          <ListOrdered className="h-4 w-4" /> Open Positions
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-zinc-400 text-left">
+                <th className="px-4 py-2">Ticket</th>
+                <th className="px-4 py-2">Symbol</th>
+                <th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2">Volume</th>
+                <th className="px-4 py-2">Open Price</th>
+                <th className="px-4 py-2">Current Price</th>
+                <th className="px-4 py-2">SL</th>
+                <th className="px-4 py-2">TP</th>
+                <th className="px-4 py-2">Profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.length === 0 ? (
+                <tr><td colSpan={9} className="px-4 py-6 text-center text-zinc-500">No open positions</td></tr>
+              ) : (
+                positions.map((p) => (
+                  <tr key={p.ticket} className="border-t border-zinc-800">
+                    <td className="px-4 py-2">{p.ticket}</td>
+                    <td className="px-4 py-2 font-medium text-zinc-200">{p.symbol}</td>
+                    <td className={`px-4 py-2 font-medium flex items-center gap-1 ${p.type === "BUY" ? "text-emerald-400" : "text-red-400"}`}>
+                      {p.type === "BUY" ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+                      {p.type}
+                    </td>
+                    <td className="px-4 py-2">{p.volume}</td>
+                    <td className="px-4 py-2">{p.price_open}</td>
+                    <td className="px-4 py-2">{p.price_current}</td>
+                    <td className="px-4 py-2">{p.sl}</td>
+                    <td className="px-4 py-2">{p.tp}</td>
+                    <td className={`px-4 py-2 font-medium ${p.profit >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {p.profit.toFixed(2)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+        <button
+          onClick={() => setOrdersOpen((v) => !v)}
+          className="w-full px-4 py-3 text-sm font-medium text-zinc-300 border-b border-zinc-800 flex items-center justify-between gap-2"
+        >
+          <span className="flex items-center gap-2">
+            <Clock className="h-4 w-4" /> Pending Orders
+            {orders.length > 0 && <span className="text-xs text-zinc-500">({orders.length})</span>}
+          </span>
+          <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${ordersOpen ? "rotate-180" : ""}`} />
+        </button>
+        {ordersOpen && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-zinc-400 text-left">
+                  <th className="px-4 py-2">Ticket</th>
+                  <th className="px-4 py-2">Symbol</th>
+                  <th className="px-4 py-2">Type</th>
+                  <th className="px-4 py-2">Volume</th>
+                  <th className="px-4 py-2">Price</th>
+                  <th className="px-4 py-2">SL</th>
+                  <th className="px-4 py-2">TP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-6 text-center text-zinc-500">No pending orders</td></tr>
+                ) : (
+                  orders.map((o) => (
+                    <tr key={o.ticket} className="border-t border-zinc-800">
+                      <td className="px-4 py-2">{o.ticket}</td>
+                      <td className="px-4 py-2 font-medium text-zinc-200">{o.symbol}</td>
+                      <td className={`px-4 py-2 font-medium ${o.type.startsWith("BUY") ? "text-emerald-400" : "text-red-400"}`}>
+                        {o.type}
+                      </td>
+                      <td className="px-4 py-2">{o.volume}</td>
+                      <td className="px-4 py-2">{o.price_open}</td>
+                      <td className="px-4 py-2">{o.sl}</td>
+                      <td className="px-4 py-2">{o.tp}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-sm text-zinc-400">
+          Floating PnL
+          <span className={`font-semibold ${floatingPnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {floatingPnl >= 0 ? "+" : ""}{floatingPnl.toFixed(2)} USD
+          </span>
+        </div>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+          <button onClick={() => setConfirmAction("profitable")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+            <PiggyBank className="h-4 w-4 shrink-0" /> Close Profitable
+          </button>
+          <button onClick={() => setConfirmAction("all")} className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-semibold text-white transition-colors">
+            <OctagonX className="h-4 w-4 shrink-0" /> Close All Positions
+          </button>
+        </div>
+      </div>
+
+      {confirmAction && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-400" />
+              {confirmAction === "all" ? "Confirm Close All Positions" : "Confirm Close Profitable Positions"} — {label}
+            </h3>
+            <p className="text-sm text-zinc-400 mb-6">
+              {confirmAction === "all"
+                ? `ปิดทุก position บน ${label} ที่ราคาตลาด ไม่สามารถยกเลิกได้`
+                : `ปิดเฉพาะ position ที่กำไรอยู่บน ${label} ที่ราคาตลาด ไม่สามารถยกเลิกได้`}
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirmAction(null)} className="px-4 py-2 text-sm rounded-md bg-zinc-800 hover:bg-zinc-700">Cancel</button>
+              <button onClick={handleClose} disabled={closing} className="px-4 py-2 text-sm rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-50 font-semibold">
+                {closing ? "Closing..." : "Yes, Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SummaryCard({ label, value, currency, suffix, icon: Icon }: { label: string; value?: number; currency?: string; suffix?: string; icon?: React.ComponentType<{ className?: string }> }) {
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 sm:p-4">
+      <p className="text-xs sm:text-sm text-zinc-400 flex items-center gap-1.5">
+        {Icon && <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />}
+        <span className="truncate">{label}</span>
+      </p>
+      <p className="text-base sm:text-2xl font-semibold mt-1 whitespace-nowrap overflow-hidden text-ellipsis">
+        {value !== undefined
+          ? `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix ?? (currency ? ` ${currency}` : "")}`
+          : "—"}
+      </p>
+    </div>
+  );
+}

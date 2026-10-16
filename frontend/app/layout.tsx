@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Thai } from "next/font/google";
 import "./globals.css";
+import { Shell } from "./dashboard";
 
 const ibmPlexSansThai = IBM_Plex_Sans_Thai({
   variable: "--font-ibm-plex-sans-thai",
@@ -36,7 +37,9 @@ export default function RootLayout({
       className={`${ibmPlexSansThai.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-[var(--font-ibm-plex-sans-thai)]">{children}</body>
+      <body className="min-h-full flex flex-col font-[var(--font-ibm-plex-sans-thai)]">
+        <Shell>{children}</Shell>
+      </body>
     </html>
   );
 }
