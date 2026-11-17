@@ -1801,24 +1801,75 @@ function LightweightCandleChart({
   );
 }
 
-interface EaSignal {
+interface EaFactSection {
+  title: string;
+  items: string[];
+}
+
+interface EaProfile {
+  kind: "gts" | "gsg";
+  name: string;
+  version: string;
+  short: string;
+  magic: number;
+  cadence: string;
+  facts: EaFactSection[];
+}
+
+type Relation = "above" | "below" | "equal";
+
+interface EaSignalBase {
   symbol: string;
+  profile?: EaProfile;
   signal: "BUY" | "SELL" | "WAIT";
+  adx: number | null;
+  adx_min: number;
+  adx_ok: boolean;
+  next_check: number;
+  price_now?: number | null;
+}
+
+// Backends deployed before per-EA profiles return this shape without `kind`/`profile`.
+interface GsgSignal extends EaSignalBase {
+  kind?: "gsg";
   h4_close: number;
   ema_fast: number;
   ema_slow: number;
-  adx: number | null;
   adx_now: number | null;
-  adx_min: number;
-  price_vs_fast: "above" | "below" | "equal";
-  fast_vs_slow: "above" | "below" | "equal";
-  adx_ok: boolean;
+  price_vs_fast: Relation;
+  fast_vs_slow: Relation;
   decided_at: number;
-  next_check: number;
-  price_now?: number | null;
   flip?: { buy_above: number; sell_below: number; cross_price: number };
   rule: { ema_fast: number; ema_slow: number; adx_period: number; adx_min: number };
 }
+
+interface GtsVote {
+  tf: string;
+  vote: number;
+  weight: number;
+  close: number | null;
+  ema_fast: number | null;
+  ema_slow: number | null;
+  live_bar: boolean;
+  loaded: boolean;
+}
+
+interface GtsSignal extends EaSignalBase {
+  kind: "gts";
+  mode: "SCALP" | "RUNNER" | null;
+  score: number;
+  votes: GtsVote[];
+  h1_vote: number;
+  adx_strong: number;
+  blockers: string[];
+  h1_flip: { up_above: number; down_below: number; cross_price: number } | null;
+  rule: {
+    ema_fast: number; ema_slow: number; adx_period: number;
+    min_score: number; strong_score: number; require_h1: boolean; weights: Record<string, number>;
+  };
+}
+
+type EaSignal = GsgSignal | GtsSignal;
 
 function useEaSignal(accountId: number, symbol: string | undefined) {
   const [signal, setSignal] = useState<EaSignal | null>(null);
@@ -1834,7 +1885,7 @@ function useEaSignal(accountId: number, symbol: string | undefined) {
         .catch(() => { if (alive) setFailed(true); });
     };
     fetchData();
-    // The EA only re-decides when an H4 bar closes; ADX moves hourly. A minute is plenty.
+    // GSG only re-decides when an H4 bar closes and GTS reads closed H1 bars; a minute is plenty.
     const interval = setInterval(fetchData, 60000);
     return () => { alive = false; clearInterval(interval); };
   }, [accountId, symbol]);
@@ -1849,11 +1900,273 @@ function formatServerTime(t: number) {
   });
 }
 
+const relationSymbol = (r: Relation) => (r === "above" ? ">" : r === "below" ? "<" : "=");
+const relationColor = (r: Relation) =>
+  r === "above" ? "text-emerald-400" : r === "below" ? "text-red-400" : "text-zinc-400";
+
+function eaSignalBadge(signal: EaSignal | null): { text: string; className: string } {
+  if (!signal) return { text: "", className: "bg-zinc-800 text-zinc-400" };
+  if (signal.kind === "gts") {
+    if (signal.signal === "WAIT") return { text: "STAND ASIDE", className: "bg-zinc-800 text-zinc-300" };
+    const side = signal.signal === "BUY" ? "BUY" : "SELL";
+    return {
+      text: `${side} เท่านั้น${signal.mode ? ` · ${signal.mode}` : ""}`,
+      className: signal.signal === "BUY" ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300",
+    };
+  }
+  if (signal.signal === "BUY") return { text: "BUY อย่างเดียว", className: "bg-emerald-900/50 text-emerald-300" };
+  if (signal.signal === "SELL") return { text: "SELL อย่างเดียว", className: "bg-red-900/50 text-red-300" };
+  return { text: "no trend – waiting", className: "bg-zinc-800 text-zinc-300" };
+}
+
+// What the open positions mean given the signal, per EA: GSG finishes the old side first,
+// GTS closes everything the moment H1 turns against the side it holds.
+function eaNote(signal: EaSignal, buys: number, sells: number): string | null {
+  if (signal.kind === "gts") {
+    const held = buys > 0 && sells === 0 ? 1 : sells > 0 && buys === 0 ? -1 : 0;
+    if (held !== 0 && signal.h1_vote === -held) {
+      return "H1 พลิกสวนทิศที่ถืออยู่ — ตามกฎ GTS จะปิดทุกไม้ของรอบนี้ทันที แล้วพัก/อ่านเทรนด์ใหม่";
+    }
+    if (signal.signal === "WAIT") {
+      return held !== 0
+        ? "ไม่มีสัญญาณใหม่ — GTS ไม่เปิดรอบใหม่ แต่ยังดูแลไม้เดิมจนจบรอบ"
+        : "ยืนดู — GTS ไม่เปิดไม้ใหม่";
+    }
+    return null;
+  }
+  const oppositeOpen = signal.signal === "BUY" ? sells : signal.signal === "SELL" ? buys : 0;
+  if (oppositeOpen > 0) {
+    return `สัญญาณเป็น ${signal.signal} แต่ยังมีไม้ฝั่งตรงข้ามค้าง ${oppositeOpen} ไม้ — EA หยุดเปิดไม้ฝั่งเก่า รอปิดหมดก่อนเริ่มฝั่งใหม่`;
+  }
+  return signal.signal === "WAIT" ? "ไม่มีเทรนด์ชัดเจน — EA รอ ไม่เปิดไม้ใหม่" : null;
+}
+
+type FlipRow = { to: "BUY" | "SELL" | "STAND ASIDE" | "no trend"; cond: string; target: number | null };
+
+function EaFlipList({ heading, rows, priceNow, footer }: {
+  heading: React.ReactNode;
+  rows: FlipRow[];
+  priceNow: number | null | undefined;
+  footer: React.ReactNode;
+}) {
+  if (rows.length === 0) return null;
+  const toClass = (to: string) => (to === "BUY" ? "text-emerald-400" : to === "SELL" ? "text-red-400" : "text-zinc-300");
+  return (
+    <div className="border-t border-zinc-800 pt-2.5 space-y-1.5">
+      <div className="text-xs text-zinc-400">{heading}</div>
+      <div className="space-y-1.5 text-xs">
+        {rows.map((row) => (
+          <div key={row.to} className="flex items-start gap-2">
+            <span className={`shrink-0 w-24 font-semibold ${toClass(row.to)}`}>→ {row.to}</span>
+            <span className="text-zinc-300">
+              {row.cond}
+              {priceNow != null && row.target !== null && (
+                <span className="text-zinc-500"> (ห่างจากราคาตอนนี้ {Math.abs(row.target - priceNow).toFixed(2)})</span>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[11px] text-zinc-500">{footer}</div>
+    </div>
+  );
+}
+
+function CheckValue({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <span className={`font-mono flex items-center gap-1 ${ok ? "text-emerald-400" : "text-red-400"}`}>
+      {ok ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+      {children}
+    </span>
+  );
+}
+
+// GSG (v1.8 / v2.09): H4 close vs EMA20, EMA20 vs EMA60, H1 ADX; decided only when H4 closes.
+function GsgFilter({ signal }: { signal: GsgSignal }) {
+  const { buy_above, sell_below } = signal.flip ?? { buy_above: 0, sell_below: 0 };
+  const adxMin = signal.adx_min;
+  const flipRows: FlipRow[] = [];
+  if (signal.flip) {
+    if (signal.signal === "SELL") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดเหนือ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+    } else if (signal.signal === "BUY") {
+      flipRows.push({ to: "no trend", cond: `H4 ปิดใต้ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    } else {
+      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
+      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
+    }
+  }
+
+  return (
+    <>
+      <div className="space-y-1.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">H4 Close vs EMA{signal.rule.ema_fast}</span>
+          <span className={`font-mono ${relationColor(signal.price_vs_fast)}`}>
+            {signal.h4_close.toFixed(2)} {relationSymbol(signal.price_vs_fast)} {signal.ema_fast.toFixed(2)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">EMA{signal.rule.ema_fast} vs EMA{signal.rule.ema_slow} (H4)</span>
+          <span className={`font-mono ${relationColor(signal.fast_vs_slow)}`}>
+            {signal.ema_fast.toFixed(2)} {relationSymbol(signal.fast_vs_slow)} {signal.ema_slow.toFixed(2)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">ADX({signal.rule.adx_period}) H1 ≥ {signal.adx_min}</span>
+          <CheckValue ok={signal.adx_ok}>{signal.adx !== null ? signal.adx.toFixed(1) : "—"}</CheckValue>
+        </div>
+      </div>
+
+      <EaFlipList
+        heading={<>จะเปลี่ยนหน้าเล่นเมื่อ <span className="text-zinc-300">แท่ง H4 ปิดรอบถัดไป ({formatServerTime(signal.next_check)})</span></>}
+        rows={flipRows}
+        priceNow={signal.price_now}
+        footer={<>
+          {signal.price_now != null && `ราคาตอนนี้ ${signal.price_now.toFixed(2)} · `}
+          ADX ต้องห่างจาก {signal.adx_min} อีก {signal.adx !== null ? Math.abs(signal.adx - signal.adx_min).toFixed(1) : "—"} จุด · ระหว่างรอบ EA ไม่เปลี่ยนฝั่ง
+        </>}
+      />
+    </>
+  );
+}
+
+// GTS: 8-timeframe EMA vote, weighted score on W1/D1/H4/H1, H1 must agree, ADX gate; live every M1 bar.
+function GtsFilter({ signal }: { signal: GtsSignal }) {
+  const { rule } = signal;
+  const maxScore = Object.values(rule.weights).reduce((s, w) => s + w, 0);
+  const scoreOk = Math.abs(signal.score) >= rule.min_score;
+  const wantedH1 = signal.score > 0 ? 1 : signal.score < 0 ? -1 : 0;
+  const h1Ok = !rule.require_h1 || (wantedH1 !== 0 && signal.h1_vote === wantedH1);
+  const weightText = Object.entries(rule.weights).map(([tf, w]) => `${tf}×${w}`).join(" + ");
+  const blockerText: Record<string, string> = {
+    score: `คะแนนยังไม่ถึง ±${rule.min_score}`,
+    h1: "H1 ไม่โหวตทิศเดียวกับคะแนน",
+    adx: `ADX ต่ำกว่า ${signal.adx_min}`,
+  };
+
+  const flipRows: FlipRow[] = [];
+  const f = signal.h1_flip;
+  if (f) {
+    const needBuy = `คะแนน ≥ +${rule.min_score} และ ADX ≥ ${signal.adx_min}`;
+    const needSell = `คะแนน ≤ −${rule.min_score} และ ADX ≥ ${signal.adx_min}`;
+    if (signal.signal === "BUY") {
+      flipRows.push({ to: "STAND ASIDE", cond: `H1 ปิดใต้ ${f.up_above.toFixed(2)} (H1 หมดโหวตขึ้น) หรือ ADX < ${signal.adx_min} หรือคะแนน < +${rule.min_score}`, target: f.up_above });
+      flipRows.push({ to: "SELL", cond: `H1 ปิดใต้ ${f.down_below.toFixed(2)} และ ${needSell}`, target: f.down_below });
+    } else if (signal.signal === "SELL") {
+      flipRows.push({ to: "STAND ASIDE", cond: `H1 ปิดเหนือ ${f.down_below.toFixed(2)} (H1 หมดโหวตลง) หรือ ADX < ${signal.adx_min} หรือคะแนน > −${rule.min_score}`, target: f.down_below });
+      flipRows.push({ to: "BUY", cond: `H1 ปิดเหนือ ${f.up_above.toFixed(2)} และ ${needBuy}`, target: f.up_above });
+    } else {
+      flipRows.push({ to: "BUY", cond: `H1 ปิดเหนือ ${f.up_above.toFixed(2)} และ ${needBuy}`, target: f.up_above });
+      flipRows.push({ to: "SELL", cond: `H1 ปิดใต้ ${f.down_below.toFixed(2)} และ ${needSell}`, target: f.down_below });
+    }
+  }
+
+  return (
+    <>
+      <div>
+        <div className="grid grid-cols-8 gap-1">
+          {signal.votes.map((v) => {
+            const tone = !v.loaded
+              ? "bg-zinc-800/50 text-zinc-600"
+              : v.vote > 0 ? "bg-emerald-900/50 text-emerald-300"
+              : v.vote < 0 ? "bg-red-900/50 text-red-300"
+              : "bg-zinc-800 text-zinc-400";
+            const detail = v.loaded
+              ? `${v.tf}${v.live_bar ? " (แท่งปัจจุบัน)" : ""}: ปิด ${v.close?.toFixed(2)} · EMA${rule.ema_fast} ${v.ema_fast?.toFixed(2)} · EMA${rule.ema_slow} ${v.ema_slow?.toFixed(2)}${v.weight ? ` · น้ำหนัก ×${v.weight}` : ""}`
+              : `${v.tf}: ข้อมูลยังไม่พอ`;
+            return (
+              <div
+                key={v.tf}
+                title={detail}
+                className={`rounded-md border py-1 text-center text-[10px] leading-tight ${v.weight > 0 ? "border-amber-500/50" : "border-transparent"} ${tone}`}
+              >
+                <div className="font-semibold">{v.tf}</div>
+                <div>{!v.loaded ? "…" : v.vote > 0 ? "▲" : v.vote < 0 ? "▼" : "–"}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-[11px] text-zinc-500 mt-1">
+          โหวต close &gt; EMA{rule.ema_fast} &gt; EMA{rule.ema_slow} · กรอบทอง = TF หลัก ({weightText})
+        </div>
+      </div>
+
+      <div className="space-y-1.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">คะแนนเทรนด์ใหญ่ (ต้องถึง ±{rule.min_score})</span>
+          <CheckValue ok={scoreOk}>{signal.score > 0 ? "+" : ""}{signal.score} / ±{maxScore}</CheckValue>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">H1 โหวตทิศเดียวกับคะแนน</span>
+          <CheckValue ok={h1Ok}>{signal.h1_vote > 0 ? "▲ ขึ้น" : signal.h1_vote < 0 ? "▼ ลง" : "– กลาง"}</CheckValue>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400">ADX({rule.adx_period}) H1 ≥ {signal.adx_min} (RUNNER ≥ {signal.adx_strong})</span>
+          <CheckValue ok={signal.adx_ok}>{signal.adx !== null ? signal.adx.toFixed(1) : "—"}</CheckValue>
+        </div>
+      </div>
+
+      {signal.signal === "WAIT" && signal.blockers.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {signal.blockers.map((b) => (
+            <span key={b} className="text-[11px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300">
+              ยืนดูเพราะ: {blockerText[b] ?? b}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <EaFlipList
+        heading={<>จะเปลี่ยนหน้าเล่นเมื่อ <span className="text-zinc-300">คะแนนหรือ H1 เปลี่ยน — ประเมินทุกแท่ง M1 ไม่ต้องรอปิดแท่ง</span></>}
+        rows={flipRows}
+        priceNow={signal.price_now}
+        footer={<>
+          {signal.price_now != null && `ราคาตอนนี้ ${signal.price_now.toFixed(2)} · `}
+          ราคาปิดแท่ง H1 ถัดไป {formatServerTime(signal.next_check)} · ถ้า H1 พลิกสวนทิศที่ถือ EA จะปิดทุกไม้ทันที
+        </>}
+      />
+    </>
+  );
+}
+
+function EaRules({ profile }: { profile: EaProfile }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t border-zinc-800 pt-2.5">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between gap-2 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+      >
+        <span>กฎของ EA ({profile.short})</span>
+        <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2.5 text-xs">
+          <div className="text-zinc-500">{profile.cadence}</div>
+          {profile.facts.map((section) => (
+            <div key={section.title}>
+              <div className="text-zinc-300 font-medium mb-1">{section.title}</div>
+              <ul className="space-y-1 text-zinc-400 list-disc pl-4 marker:text-zinc-600">
+                {section.items.map((item) => (<li key={item}>{item}</li>))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EaSignalCard({ accountId, label }: { accountId: number; label: string }) {
   const positions = useAccountPositions(accountId);
   const orders = useAccountOrders(accountId);
   const symbol = positions[0]?.symbol ?? orders[0]?.symbol;
   const { signal, failed } = useEaSignal(accountId, symbol);
+  const profile = signal?.profile;
 
   const buys = positions.filter((p) => p.type === "BUY");
   const sells = positions.filter((p) => p.type === "SELL");
@@ -1879,45 +2192,9 @@ function EaSignalCard({ accountId, label }: { accountId: number; label: string }
     sideText = "ไม่มีไม้"; sideClass = "bg-zinc-800 text-zinc-400";
   }
 
-  const signalText = !signal ? "" : signal.signal === "BUY" ? "BUY อย่างเดียว" : signal.signal === "SELL" ? "SELL อย่างเดียว" : "no trend – waiting";
-  const signalClass = !signal
-    ? "bg-zinc-800 text-zinc-400"
-    : signal.signal === "BUY" ? "bg-emerald-900/50 text-emerald-300"
-    : signal.signal === "SELL" ? "bg-red-900/50 text-red-300"
-    : "bg-zinc-800 text-zinc-300";
-
-  let note: string | null = null;
-  if (signal) {
-    const oppositeOpen = signal.signal === "BUY" ? sells.length : signal.signal === "SELL" ? buys.length : 0;
-    if (oppositeOpen > 0) {
-      note = `สัญญาณเป็น ${signal.signal} แต่ยังมีไม้ฝั่งตรงข้ามค้าง ${oppositeOpen} ไม้ — EA หยุดเปิดไม้ฝั่งเก่า รอปิดหมดก่อนเริ่มฝั่งใหม่`;
-    } else if (signal.signal === "WAIT") {
-      note = "ไม่มีเทรนด์ชัดเจน — EA รอ ไม่เปิดไม้ใหม่";
-    }
-  }
-
-  // What the next H4 close must do to change the side (EA only re-decides at H4 close).
-  const flipRows: { to: "BUY" | "SELL" | "no trend"; cond: string; target: number | null }[] = [];
-  if (signal?.flip) {
-    const { buy_above, sell_below } = signal.flip;
-    const adxMin = signal.adx_min;
-    if (signal.signal === "SELL") {
-      flipRows.push({ to: "no trend", cond: `H4 ปิดเหนือ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
-      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
-    } else if (signal.signal === "BUY") {
-      flipRows.push({ to: "no trend", cond: `H4 ปิดใต้ ${signal.ema_fast.toFixed(2)} หรือ ADX < ${adxMin}`, target: signal.ema_fast });
-      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
-    } else {
-      flipRows.push({ to: "BUY", cond: `H4 ปิดเหนือ ${buy_above.toFixed(2)} และ ADX ≥ ${adxMin}`, target: buy_above });
-      flipRows.push({ to: "SELL", cond: `H4 ปิดใต้ ${sell_below.toFixed(2)} และ ADX ≥ ${adxMin}`, target: sell_below });
-    }
-  }
-  const flipToClass = (to: string) =>
-    to === "BUY" ? "text-emerald-400" : to === "SELL" ? "text-red-400" : "text-zinc-300";
-
-  const relation = (r: "above" | "below" | "equal") => (r === "above" ? ">" : r === "below" ? "<" : "=");
-  const relationColor = (r: "above" | "below" | "equal") =>
-    r === "above" ? "text-emerald-400" : r === "below" ? "text-red-400" : "text-zinc-400";
+  const badge = eaSignalBadge(signal);
+  const note = signal ? eaNote(signal, buys.length, sells.length) : null;
+  const filterTitle = signal?.kind === "gts" ? "สัญญาณจาก trend engine" : "สัญญาณจากตัวกรอง";
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-3">
@@ -1925,6 +2202,12 @@ function EaSignalCard({ accountId, label }: { accountId: number; label: string }
         <div className="min-w-0">
           <div className="text-sm font-medium truncate">{label}</div>
           <div className="text-xs text-zinc-500">{signal?.symbol ?? symbol ?? ""}</div>
+          {profile && (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-full px-2 py-0.5">
+              <Bot className="h-3 w-3" /> {profile.short}
+              <span className="text-[10px] text-zinc-500">magic {profile.magic}</span>
+            </div>
+          )}
         </div>
         <div className="text-right shrink-0">
           <div className="text-[11px] text-zinc-500 mb-0.5">กำลังเล่น</div>
@@ -1947,78 +2230,38 @@ function EaSignalCard({ accountId, label }: { accountId: number; label: string }
         </div>
       </div>
 
-      <div className="border-t border-zinc-800 pt-3 space-y-2">
+      <div className="border-t border-zinc-800 pt-3 space-y-2.5">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs text-zinc-400 flex items-center gap-1.5">
-            <Bot className="h-3.5 w-3.5" /> สัญญาณจากตัวกรอง
+            <Bot className="h-3.5 w-3.5" /> {filterTitle}
           </div>
-          {signal && <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${signalClass}`}>{signalText}</span>}
+          {signal && <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badge.className}`}>{badge.text}</span>}
         </div>
 
         {!signal ? (
           <div className="text-xs text-zinc-500 py-1">{failed ? "ดึงค่า indicator ไม่ได้" : "กำลังโหลด..."}</div>
         ) : (
           <>
-            <div className="space-y-1.5 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-zinc-400">H4 Close vs EMA{signal.rule.ema_fast}</span>
-                <span className={`font-mono ${relationColor(signal.price_vs_fast)}`}>
-                  {signal.h4_close.toFixed(2)} {relation(signal.price_vs_fast)} {signal.ema_fast.toFixed(2)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-zinc-400">EMA{signal.rule.ema_fast} vs EMA{signal.rule.ema_slow} (H4)</span>
-                <span className={`font-mono ${relationColor(signal.fast_vs_slow)}`}>
-                  {signal.ema_fast.toFixed(2)} {relation(signal.fast_vs_slow)} {signal.ema_slow.toFixed(2)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-zinc-400">ADX({signal.rule.adx_period}) H1 ≥ {signal.adx_min}</span>
-                <span className={`font-mono flex items-center gap-1 ${signal.adx_ok ? "text-emerald-400" : "text-red-400"}`}>
-                  {signal.adx_ok ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
-                  {signal.adx !== null ? signal.adx.toFixed(1) : "—"}
-                </span>
-              </div>
-            </div>
-
-            {flipRows.length > 0 && (
-              <div className="border-t border-zinc-800 pt-2.5 space-y-1.5">
-                <div className="text-xs text-zinc-400">
-                  จะเปลี่ยนหน้าเล่นเมื่อ <span className="text-zinc-300">แท่ง H4 ปิดรอบถัดไป ({formatServerTime(signal.next_check)})</span>
-                </div>
-                <div className="space-y-1.5 text-xs">
-                  {flipRows.map((row) => (
-                    <div key={row.to} className="flex items-start gap-2">
-                      <span className={`shrink-0 w-16 font-semibold ${flipToClass(row.to)}`}>→ {row.to}</span>
-                      <span className="text-zinc-300">
-                        {row.cond}
-                        {signal.price_now != null && row.target !== null && (
-                          <span className="text-zinc-500">
-                            {" "}(ห่างจากราคาตอนนี้ {Math.abs(row.target - signal.price_now).toFixed(2)})
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                <div className="text-[11px] text-zinc-500">
-                  {signal.price_now != null && `ราคาตอนนี้ ${signal.price_now.toFixed(2)} · `}
-                  ADX ต้องห่างจาก {signal.adx_min} อีก {signal.adx !== null ? Math.abs(signal.adx - signal.adx_min).toFixed(1) : "—"} จุด · ระหว่างรอบ EA ไม่เปลี่ยนฝั่ง
-                </div>
-              </div>
-            )}
+            {signal.kind === "gts" ? <GtsFilter signal={signal} /> : <GsgFilter signal={signal} />}
 
             {note && (
               <div className="text-xs rounded-lg bg-zinc-800/60 border border-zinc-700 px-2.5 py-2 text-zinc-300">{note}</div>
             )}
 
+            {profile && <EaRules profile={profile} />}
+
             <div className="text-[11px] text-zinc-500 space-y-0.5">
-              <div>
-                ตัดสินเมื่อ {formatServerTime(signal.decided_at)} · เช็กถัดไป {formatServerTime(signal.next_check)} (เวลาเซิร์ฟเวอร์)
-              </div>
-              <div>
-                ADX ตอนนี้ {signal.adx_now !== null ? signal.adx_now.toFixed(1) : "—"} · ค่าประมาณจากแท่งเทียน MT5 ไม่ใช่ค่าที่ EA อ่านจริง
-              </div>
+              {signal.kind === "gts" ? (
+                <div>{profile?.cadence ?? "ประเมินทุกแท่ง M1"} · W1/D1 ใช้แท่งปัจจุบัน ที่เหลือใช้แท่งที่ปิดแล้ว · ต้องรอจังหวะย่อบน M5 ถึงจะเปิดไม้จริง</div>
+              ) : (
+                <>
+                  <div>
+                    ตัดสินเมื่อ {formatServerTime(signal.decided_at)} · เช็กถัดไป {formatServerTime(signal.next_check)} (เวลาเซิร์ฟเวอร์)
+                  </div>
+                  <div>ADX ตอนนี้ {signal.adx_now !== null ? signal.adx_now.toFixed(1) : "—"}</div>
+                </>
+              )}
+              <div>ค่าประมาณจากแท่งเทียน MT5 ไม่ใช่ค่าที่ EA อ่านจริง · ชื่อ/เวอร์ชัน EA ตั้งไว้ใน config ของ backend</div>
             </div>
           </>
         )}

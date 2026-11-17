@@ -38,6 +38,62 @@ else:
 #   otherwise no trend -> EA waits. The EA only re-evaluates when an H4 bar closes.
 EA_SIGNAL_RULE = {"ema_fast": 20, "ema_slow": 60, "adx_period": 14, "adx_min": 20.0}
 EA_DEFAULT_SYMBOL = {1: "XAUUSDm", 2: "XAUUSDm"}
+
+# GoldTrendScalper v1.00 votes on 8 timeframes (+1 if close > EMA20 > EMA50, -1 if the
+# reverse, else 0). W1/D1 read the bar still forming, every other TF the last closed bar.
+GTS_RULE = {
+    "ema_fast": 20, "ema_slow": 50,
+    "weights": {"W1": 1, "D1": 2, "H4": 3, "H1": 3},
+    "min_score": 5, "strong_score": 8, "require_h1": True,
+    "adx_period": 14, "adx_min": 18.0, "adx_strong": 25.0,
+}
+GTS_TIMEFRAMES = ["W1", "D1", "H4", "H1", "M30", "M15", "M5", "M1"]
+GTS_LIVE_BAR_TFS = {"W1", "D1"}
+
+# Which EA runs on which account. The MT5 Python API cannot read the EA attached to a
+# chart, so this is configuration: update it when an EA is swapped (see the deploy notes).
+# `kind` picks the signal engine; `facts` is what the dashboard shows under "กฎของ EA".
+EA_PROFILES = {
+    1: {
+        "kind": "gts", "name": "GoldTrendScalper", "version": "v1.00", "short": "GTS v1.00", "magic": 99001,
+        "cadence": "ประเมินทุกแท่ง M1 (ไม่รอปิดแท่ง H4)",
+        "facts": [
+            {"title": "วิธีเปิดไม้", "items": [
+                "เล่นตามเทรนด์ใหญ่เท่านั้น แล้วรอจังหวะย่อบน M5 (ตรวจตอนแท่ง M5 ปิด): ย่อแตะ EMA20 ภายใน 8 แท่ง แล้วปิดกลับทิศเทรนด์",
+                "ไม่เข้าถ้าราคายืดห่าง EMA เกิน 1.5×ATR หรือ ATR(M5) เกิน $6",
+                "lot 0.01 ทุกไม้ · SL เซิร์ฟเวอร์ $18 · TP $4 (SCALP) หรือ $20 (RUNNER)",
+            ]},
+            {"title": "เมื่อไปผิดทาง", "items": [
+                "ราคาสวน ≥ $5 (หรือ 1.5×ATR) และเทรนด์ใหญ่ยังเดิม และแท่ง M5 ปิดกลับทิศ → เพิ่มชั้น lot เท่าเดิม สูงสุด 3 ไม้",
+                "มี 2 ไม้ขึ้นไป → รวบปิดที่กำไรสุทธิ +$3",
+                "ตัดทั้งชุดที่ขาดทุน $30 · H1 พลิกสวนทิศ → ปิดทันที · ถือเกิน 360 นาที → ปิด",
+            ]},
+            {"title": "ป้องกัน", "items": [
+                "Breakeven เมื่อกำไร $2.5 (ล็อก +$0.30) · RUNNER trail เริ่มที่ +$4 ตามหลัง $2.5",
+                "หลังแพ้พัก 30 นาที · แพ้ติดกัน 3 รอบพัก 4 ชม. · ขาดทุนรายวัน 5% หยุดทั้งวัน",
+                "เปิดรอบใหม่ 01–21 เวลาเซิร์ฟเวอร์ · ปิดทุกไม้ศุกร์ 19:00 · equity ต่ำกว่า 70% ของทุน = ปิดหมดแล้ว HALT",
+            ]},
+        ],
+    },
+    2: {
+        "kind": "gsg", "name": "GSG", "version": "v2.09", "short": "GSG v2.09", "magic": 88101,
+        "cadence": "เช็กฝั่งเฉพาะตอนแท่ง H4 ปิด (00, 04, 08, 12, 16, 20 น. เวลาเซิร์ฟเวอร์)",
+        "facts": [
+            {"title": "วิธีวางออเดอร์", "items": [
+                "Buy/Sell Stop ห่างจากราคา $2 และถอยห่างเพิ่ม $1 ทุกครั้งที่มีไม้เข้า (band 2–4) · lot 0.01",
+                "เล่นฝั่งเดียวตามตัวกรอง ไม่ถือ BUY+SELL ซ้อนกัน · TP $16 ต่อไม้",
+            ]},
+            {"title": "เป้าและตัดขาดทุน", "items": [
+                "เป้ากำไรทั้งชุด $64 · ตัดขาดทุนทั้งชุด (BSL) $260",
+                "Emergency SL $90 ติดมากับทุกไม้และ pending · Breakeven เมื่อกำไร +$8 ล็อก +$0.30",
+            ]},
+            {"title": "ตัวกรองทิศ", "items": [
+                "ใช้ตัวกรองอย่างเดียว ไม่มีล็อกทางเดียวและ Side SL เพราะเล่นฝั่งเดียวอยู่แล้ว",
+                "ถ้าสัญญาณกลับตอนมีไม้ค้าง หยุดเปิดไม้ฝั่งเก่า รอปิดหมดก่อนค่อยเริ่มฝั่งใหม่",
+            ]},
+        ],
+    },
+}
 H4_SECONDS = 4 * 3600
 H1_SECONDS = 3600
 
@@ -294,21 +350,33 @@ def get_orders(account_id: int):
     return result
 
 
-@app.get("/api/ea_signal/{account_id}")
-def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
-    """Recompute the EAs' side-selection filter from MT5 candles.
+def _public_profile(profile):
+    return {k: profile[k] for k in ("kind", "name", "version", "short", "magic", "cadence", "facts")}
 
-    This mirrors the EA's rule rather than reading it from the EA (the MT5 Python API
-    cannot see inside a compiled EA), so values are an estimate of what the EA saw at
-    its last H4-close check.
+
+def _side(a, b):
+    return "above" if a > b else "below" if a < b else "equal"
+
+
+def _ema_flip_thresholds(ema_fast, ema_slow, period_fast, period_slow):
+    """Close needed on the next bar for `close > EMA_fast > EMA_slow` (or the mirror).
+
+    A close c moves each EMA to a*c + (1-a)*prev, so `close > EMA_fast'` flips exactly at
+    the current EMA_fast, and `EMA_fast' > EMA_slow'` flips at the solved cross price (the
+    inequality is oriented by the faster EMA having the larger alpha).
     """
-    ensure_connection(account_id)
-    symbol = symbol or EA_DEFAULT_SYMBOL.get(account_id, "XAUUSDm")
+    a_fast = 2.0 / (period_fast + 1)
+    a_slow = 2.0 / (period_slow + 1)
+    cross = ((1 - a_slow) * ema_slow - (1 - a_fast) * ema_fast) / (a_fast - a_slow)
+    return max(ema_fast, cross), min(ema_fast, cross), cross
+
+
+def _signal_gsg(profile, symbol):
     rule = EA_SIGNAL_RULE
 
     if MOCK_MODE:
         return {
-            "symbol": symbol, "signal": "BUY", "h4_close": 2351.2, "ema_fast": 2342.8, "ema_slow": 2330.1,
+            "signal": "BUY", "h4_close": 2351.2, "ema_fast": 2342.8, "ema_slow": 2330.1,
             "adx": 24.6, "adx_now": 26.1, "adx_min": rule["adx_min"],
             "price_vs_fast": "above", "fast_vs_slow": "above", "adx_ok": True,
             "decided_at": 1700000000, "next_check": 1700000000 + H4_SECONDS, "rule": rule,
@@ -316,7 +384,6 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
             "flip": {"buy_above": 2342.8, "sell_below": 2342.8, "cross_price": 2300.0},
         }
 
-    mt5.symbol_select(symbol, True)
     h4 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 400)
     h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 600)
     if h4 is None or h1 is None or len(h4) < rule["ema_slow"] + 3 or len(h1) < rule["adx_period"] * 3:
@@ -341,11 +408,8 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
     adx_at_decision = adx_of([r for r in h1 if int(r["time"]) <= decided_at - H1_SECONDS])
     adx_now = adx_of(h1[:-1])
 
-    def side(a, b):
-        return "above" if a > b else "below" if a < b else "equal"
-
-    price_vs_fast = side(h4_close, ema_fast)
-    fast_vs_slow = side(ema_fast, ema_slow)
+    price_vs_fast = _side(h4_close, ema_fast)
+    fast_vs_slow = _side(ema_fast, ema_slow)
     adx_ok = adx_at_decision is not None and adx_at_decision >= rule["adx_min"]
 
     if adx_ok and price_vs_fast == "above" and fast_vs_slow == "above":
@@ -355,20 +419,10 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
     else:
         signal = "WAIT"
 
-    # What the next H4 close has to do to change the side. A close c moves each EMA to
-    # a*c + (1-a)*prev, so:
-    #   close > EMA20 after the update  <=>  c > current EMA20
-    #   EMA20 > EMA60 after the update  <=>  c > cross_price (solved below; the inequality
-    #                                        flips because the faster EMA has the larger alpha)
-    # Every other flip condition is ADX >= adx_min, which depends on H1 bars and has no
-    # single price threshold.
-    a_fast = 2.0 / (rule["ema_fast"] + 1)
-    a_slow = 2.0 / (rule["ema_slow"] + 1)
-    cross_price = ((1 - a_slow) * ema_slow - (1 - a_fast) * ema_fast) / (a_fast - a_slow)
+    buy_above, sell_below, cross_price = _ema_flip_thresholds(ema_fast, ema_slow, rule["ema_fast"], rule["ema_slow"])
     tick = mt5.symbol_info_tick(symbol)
 
     return {
-        "symbol": symbol,
         "signal": signal,
         "h4_close": h4_close,
         "ema_fast": ema_fast,
@@ -382,13 +436,133 @@ def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
         "decided_at": decided_at,
         "next_check": decided_at + H4_SECONDS,
         "price_now": tick.bid if tick else None,
-        "flip": {
-            "buy_above": max(ema_fast, cross_price),
-            "sell_below": min(ema_fast, cross_price),
-            "cross_price": cross_price,
-        },
+        "flip": {"buy_above": buy_above, "sell_below": sell_below, "cross_price": cross_price},
         "rule": rule,
     }
+
+
+def _signal_gts(profile, symbol):
+    rule = GTS_RULE
+
+    if MOCK_MODE:
+        votes = [
+            {"tf": tf, "vote": v, "weight": rule["weights"].get(tf, 0), "close": 2351.2, "ema_fast": 2342.8,
+             "ema_slow": 2330.1, "live_bar": tf in GTS_LIVE_BAR_TFS, "loaded": True}
+            for tf, v in zip(GTS_TIMEFRAMES, [1, 1, 1, 1, 1, 0, -1, 0])
+        ]
+        return {
+            "signal": "BUY", "mode": "SCALP", "score": 9, "votes": votes, "h1_vote": 1,
+            "adx": 24.6, "adx_min": rule["adx_min"], "adx_strong": rule["adx_strong"], "adx_ok": True,
+            "blockers": [], "price_now": 2351.5, "next_check": 1700003600,
+            "h1_flip": {"up_above": 2342.8, "down_below": 2342.8, "cross_price": 2300.0}, "rule": rule,
+        }
+
+    votes = []
+    h1_rows = None
+    for tf in GTS_TIMEFRAMES:
+        rows = mt5.copy_rates_from_pos(symbol, TIMEFRAME_MAP[tf], 0, 300)
+        live = tf in GTS_LIVE_BAR_TFS
+        if rows is not None and tf == "H1":
+            h1_rows = rows
+        usable = None if rows is None else (rows if live else rows[:-1])
+        weight = rule["weights"].get(tf, 0)
+        if usable is None or len(usable) < rule["ema_slow"] + 2:
+            votes.append({"tf": tf, "vote": 0, "weight": weight, "close": None, "ema_fast": None,
+                          "ema_slow": None, "live_bar": live, "loaded": False})
+            continue
+        closes = [float(r["close"]) for r in usable]
+        close = closes[-1]
+        ema_fast = ema_last(closes, rule["ema_fast"])
+        ema_slow = ema_last(closes, rule["ema_slow"])
+        vote = 1 if close > ema_fast > ema_slow else -1 if close < ema_fast < ema_slow else 0
+        votes.append({"tf": tf, "vote": vote, "weight": weight, "close": close, "ema_fast": ema_fast,
+                      "ema_slow": ema_slow, "live_bar": live, "loaded": True})
+
+    if h1_rows is None or len(h1_rows) < rule["adx_period"] * 3:
+        raise HTTPException(status_code=503, detail=f"Not enough H1 data for {symbol}")
+
+    score = sum(v["vote"] * v["weight"] for v in votes)
+    h1_vote = next(v["vote"] for v in votes if v["tf"] == "H1")
+    closed_h1 = h1_rows[:-1]
+    adx = adx_last(
+        [float(r["high"]) for r in closed_h1],
+        [float(r["low"]) for r in closed_h1],
+        [float(r["close"]) for r in closed_h1],
+        rule["adx_period"],
+    )
+    adx_ok = adx is not None and adx >= rule["adx_min"]
+
+    def h1_ok(direction):
+        return (not rule["require_h1"]) or h1_vote == direction
+
+    if score >= rule["min_score"] and h1_ok(1) and adx_ok:
+        signal = "BUY"
+    elif score <= -rule["min_score"] and h1_ok(-1) and adx_ok:
+        signal = "SELL"
+    else:
+        signal = "WAIT"
+
+    mode = None
+    if signal != "WAIT" and abs(score) >= rule["strong_score"] and adx is not None and adx >= rule["adx_strong"]:
+        mode = "RUNNER"
+    elif signal != "WAIT":
+        mode = "SCALP"
+
+    # Why it is standing aside (mirrors the EA panel's "Now" line).
+    blockers = []
+    if signal == "WAIT":
+        if abs(score) < rule["min_score"]:
+            blockers.append("score")
+        elif rule["require_h1"] and h1_vote != (1 if score > 0 else -1):
+            blockers.append("h1")
+        if not adx_ok:
+            blockers.append("adx")
+
+    h1v = next(v for v in votes if v["tf"] == "H1")
+    h1_flip = None
+    if h1v["loaded"]:
+        up_above, down_below, cross = _ema_flip_thresholds(h1v["ema_fast"], h1v["ema_slow"], rule["ema_fast"], rule["ema_slow"])
+        h1_flip = {"up_above": up_above, "down_below": down_below, "cross_price": cross}
+
+    tick = mt5.symbol_info_tick(symbol)
+    return {
+        "signal": signal,
+        "mode": mode,
+        "score": score,
+        "votes": votes,
+        "h1_vote": h1_vote,
+        "adx": adx,
+        "adx_min": rule["adx_min"],
+        "adx_strong": rule["adx_strong"],
+        "adx_ok": adx_ok,
+        "blockers": blockers,
+        "price_now": tick.bid if tick else None,
+        "next_check": int(h1_rows[-1]["time"]) + H1_SECONDS,
+        "h1_flip": h1_flip,
+        "rule": rule,
+    }
+
+
+@app.get("/api/ea_signal/{account_id}")
+def get_ea_signal(account_id: int, symbol: Optional[str] = Query(None)):
+    """Recompute the side-selection rule of the EA running on this account from MT5 candles.
+
+    This mirrors the EA's rule rather than reading it from the EA (the MT5 Python API
+    cannot see inside a compiled EA), so values are an estimate of what the EA saw.
+    `EA_PROFILES` says which rule applies to which account.
+    """
+    ensure_connection(account_id)
+    profile = EA_PROFILES.get(account_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"No EA profile for account {account_id}")
+    symbol = symbol or EA_DEFAULT_SYMBOL.get(account_id, "XAUUSDm")
+
+    if not MOCK_MODE:
+        mt5.symbol_select(symbol, True)
+
+    engine = _signal_gts if profile["kind"] == "gts" else _signal_gsg
+    result = engine(profile, symbol)
+    return {"symbol": symbol, "kind": profile["kind"], "profile": _public_profile(profile), **result}
 
 
 @app.get("/api/tick/{account_id}")
