@@ -363,10 +363,11 @@ export function OverviewTab() {
   );
 }
 
-type RangePreset = "today" | "week" | "month" | "3m" | "6m" | "year" | "custom";
+type RangePreset = "today" | "yesterday" | "week" | "month" | "3m" | "6m" | "year" | "custom";
 
 const RANGE_PRESETS: { key: RangePreset; label: string }[] = [
   { key: "today", label: "วันนี้" },
+  { key: "yesterday", label: "เมื่อวาน" },
   { key: "week", label: "อาทิตย์นี้" },
   { key: "month", label: "เดือนนี้" },
   { key: "3m", label: "3 เดือนล่าสุด" },
@@ -405,6 +406,8 @@ function presetRange(preset: Exclude<RangePreset, "custom">, today: Date): { sta
   switch (preset) {
     case "today":
       return { start: today, end: today };
+    case "yesterday":
+      return { start: addDays(today, -1), end: addDays(today, -1) };
     case "week": {
       const monday = addDays(today, -((today.getDay() + 6) % 7));
       return { start: monday, end: addDays(monday, 6) };
@@ -467,7 +470,8 @@ function useRangeHistory() {
     ).then((entries) => setAccountLabels(Object.fromEntries(entries)));
   }, []);
 
-  const hourly = preset === "today";
+  // A single day is plotted per hour on a 0-23 axis; longer ranges per day.
+  const hourly = preset === "today" || preset === "yesterday";
 
   useEffect(() => {
     if (!mounted) return;
@@ -503,7 +507,7 @@ function useRangeHistory() {
   let daily: number[];
 
   if (hourly) {
-    // "Today" plots per hour on a fixed 0-23 axis; points run to the last hour with deals.
+    // A single day plots per hour on a fixed 0-23 axis; points run to the last hour with deals.
     const hourOf = (iso: string) => Number(iso.slice(11, 13));
     const byHour: Record<number, number> = {};
     history.forEach((h) => (byHour[hourOf(h.date)] = (byHour[hourOf(h.date)] ?? 0) + h.profit));
@@ -986,6 +990,22 @@ function PnLChart({
 }: ReturnType<typeof useRangeHistory>) {
   const rangeTotal = cumulative[cumulative.length - 1] ?? 0;
   const { W, H, padL, padR, yFor, xFor, ticks, xLabelIdx } = chartScales(cumulative, slots);
+
+  // The SVG is scaled to its container, so a fixed font size shrinks to nothing on a phone.
+  // Track the card width and size the point labels in viewBox units that render at ~10px.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [cardWidth, setCardWidth] = useState(0);
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const update = () => setCardWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const unitsPerPx = W / Math.max(cardWidth - 28, 1);
+  const labelFont = cardWidth > 0 ? 10 * unitsPerPx : 9;
   const zeroY = yFor(0);
   const color = rangeTotal >= 0 ? "#34d399" : "#f87171";
 
@@ -998,10 +1018,32 @@ function PnLChart({
     : "";
   const showDots = linePoints.length <= 62;
 
+  // Label each point with the P&L of its own period (hour/day). Biggest movers are placed first
+  // and a label is skipped when it would overlap one already placed, so dense ranges stay legible.
+  const labelDecimals = linePoints.length <= 14 ? 2 : 0;
+  const pointLabels: { i: number; x: number; y: number; text: string; positive: boolean }[] = [];
+  {
+    const placed: { x0: number; x1: number }[] = [];
+    const order = daily
+      .map((v, i) => ({ v, i }))
+      .filter(({ v }) => Math.abs(v) >= 0.005)
+      .sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    for (const { v, i } of order) {
+      const text = `${v > 0 ? "+" : ""}${v.toFixed(labelDecimals)}`;
+      const w = text.length * labelFont * 0.6 + labelFont * 0.5;
+      const x = Math.min(Math.max(xFor(i), w / 2 + 2), W - w / 2 - 2);
+      if (placed.some((p) => x - w / 2 < p.x1 && x + w / 2 > p.x0)) continue;
+      placed.push({ x0: x - w / 2, x1: x + w / 2 });
+      const py = linePoints[i][1];
+      const above = py - labelFont * 0.8;
+      pointLabels.push({ i, x, y: above < labelFont ? py + labelFont * 1.5 : above, text, positive: v > 0 });
+    }
+  }
+
   const gradId = `pnlGrad-${accountId}`;
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
+    <div ref={cardRef} className="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5">
       <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <div className="text-sm font-medium flex items-center gap-1.5">
@@ -1065,6 +1107,24 @@ function PnLChart({
                 <title>{`${fullDates[i]}: สะสม ${cumulative[i] >= 0 ? "+" : ""}${cumulative[i].toFixed(2)} USD (รายวัน ${daily[i] >= 0 ? "+" : ""}${daily[i].toFixed(2)})`}</title>
               </circle>
             </g>
+          ))}
+
+          {pointLabels.map((l) => (
+            <text
+              key={l.i}
+              x={l.x}
+              y={l.y}
+              textAnchor="middle"
+              fontSize={labelFont}
+              fontWeight={600}
+              fill={l.positive ? "#34d399" : "#f87171"}
+              stroke="#18181b"
+              strokeWidth={labelFont * 0.28}
+              paintOrder="stroke"
+              pointerEvents="none"
+            >
+              {l.text}
+            </text>
           ))}
         </svg>
       )}
